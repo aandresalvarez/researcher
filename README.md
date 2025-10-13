@@ -30,8 +30,10 @@ Ask your first question
 What you’ll see with streaming
 - `ready` → stream is live
 - `token` → incremental text
-- `score` → uncertainty and verifier scores
+- `score` → uncertainty and verifier scores (SNNE/S₂)
 - `tool` → when tools run (with safety metadata)
+- `pcn` → numeric verification status (see PCN below)
+- `gov` → reasoning DAG checks (Graph‑of‑Verification)
 - `final` → full structured result
 
 Configuration (basics)
@@ -50,6 +52,24 @@ Observability
 - Dashboard JSON: `GET /dashboards/summary`
 - Metrics (Prometheus): `GET /metrics/prom`
 - Quick JSON metrics: `GET /metrics`
+
+UQ, CP, PCN, GoV, Memory
+- Uncertainty (UQ): Uses SNNE (Semantic Nearest‑Neighbor Entropy) with calibration.
+  - Streaming `score` events include: `mode`, `s1` (SNNE normalized), `s2` (verifier), `final_score`, `cp_accept`.
+  - Prometheus exposes SNNE metrics: averages, samples, and per‑domain stats.
+- Conformal Prediction (CP): The service can gate accept/abstain using per‑domain τ.
+  - `GET /cp/threshold?domain=default` returns τ (bootstrap from eval artifacts).
+  - CP is auto‑enabled when a τ is available (config: `cp_enabled`, `cp_auto_enable`).
+  - The Decision Head uses CP + threshold: accept only when `cp_accept` is true and the final score ≥ accept threshold.
+- Proof‑Carrying Numbers (PCN): Numeric facts are marked and verified, then rendered safely.
+  - During refinement, numeric values become tokens like `[PCN:...]`; SSE `pcn` events report `pending|verified|failed` and provenance.
+  - On streaming, `[PCN:...]` is replaced by the verified number (or `[unverified]`).
+- Graph‑of‑Verification (GoV): Reasoning steps are checked as a small DAG.
+  - SSE `gov` events carry `{dag_delta: {ok, failing}}` when a step introduces a new premise/claim.
+  - You can validate a compact DAG via `POST /gov/check` (see “More endpoints”).
+- Persistent memory: A small SQLite “modular memory” stores facts, traces, summaries.
+  - TTL cleanup runs in the background (config: `memory_ttl_days`, `steps_ttl_days`).
+  - Optional vector search (FAISS/LanceDB) can enrich retrieval; disabled by default.
 
 Safety defaults
 - Web fetch is protected (TLS required, private IPs blocked, optional allow/deny lists).
@@ -96,7 +116,15 @@ More endpoints
 - Recent steps: `GET /steps/recent?limit=50[&domain=...][&action=...][&include_trace=true]`
 - Approvals API: `POST /tools/approve` → `{ approval_id, approved, reason }`
 - Tuner (optional): propose/apply safer settings via `/tuner/propose` and `/tuner/apply`
+- CP: `GET /cp/threshold?domain=...` and `GET /cp/stats`
+- GoV: `POST /gov/check` with `{ "dag": { nodes, edges }, "verified_pcn": ["id1", ...] }` → `{ ok, failures }`
 
 Notes
 - Python version for dev is 3.14 (see `.python-version`).
 - Optional vector extras (FAISS/LanceDB) can be enabled later with `make install-vector`.
+
+FAQ
+- Which UQ method? SNNE with quantile‑based calibration and logistic fallback.
+- Is CP actually gating? Yes. If τ exists, CP gates accept/abstain and is passed into the decision head; otherwise a static threshold is used.
+- Are PCN/GoV implemented? Yes. PCN verifies numeric tokens and GoV checks premise→claim DAGs; both stream as SSE events and persist in step traces.
+- Is memory persistent? Yes (SQLite). It has TTL cleanup and can be augmented with vector backends.

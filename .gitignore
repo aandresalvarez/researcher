@@ -16,10 +16,16 @@ build/
 *.egg-info/
 
 # Data/Indexes
+# Ignore general data and binary DB/index files, but keep test fixtures.
 data/
 *.faiss
-*.sqlite
 *.db
+*.sqlite
+
+# Allow test fixtures under tests/data (including .sqlite)
+!tests/data/
+!tests/data/**
+!tests/data/*.sqlite
 
 # IDE
 .vscode/

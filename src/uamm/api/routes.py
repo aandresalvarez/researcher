@@ -52,6 +52,8 @@ from uamm.security.sql_guard import is_read_only_select, tables_allowed
 from uamm.tools.table_query import table_query as db_table_query
 from uamm.tuner import TunerAgent, TunerTargets
 from uamm.rag.vector_store import LanceDBUnavailable, upsert_document_embedding
+from uamm.gov.executor import evaluate_dag
+from uamm.gov.validator import validate_dag
 
 
 router = APIRouter()
@@ -2175,6 +2177,33 @@ def cp_threshold(
 def cp_stats(request: Request, domain: str | None = None):
     settings = request.app.state.settings
     return cp_store.domain_stats(settings.db_path, domain=domain)
+
+
+class GoVCheckRequest(BaseModel):
+    dag: Dict[str, Any]
+    verified_pcn: list[str] = Field(default_factory=list)
+
+
+@router.post("/gov/check")
+def gov_check(req: GoVCheckRequest):
+    """Validate and evaluate a compact GoV DAG.
+
+    Body example:
+      {
+        "dag": {"nodes": [...], "edges": [...]},
+        "verified_pcn": ["token123"]
+      }
+    """
+    valid, validation_failures = validate_dag(req.dag)
+    if not valid:
+        return {"ok": False, "failures": validation_failures, "validation_ok": False}
+    verified = set(req.verified_pcn)
+
+    def _pcn_status(token_id: str) -> str | None:
+        return "verified" if token_id in verified else None
+
+    ok, failures = evaluate_dag(req.dag, pcn_status=_pcn_status)
+    return {"ok": ok, "failures": failures, "validation_ok": True}
 
 
 @router.get("/steps/recent")
