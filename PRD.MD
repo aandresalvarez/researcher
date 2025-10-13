@@ -406,7 +406,7 @@ def snne(answers: List[str], tau: float, embed) -> float:
 
 ```python
 S = w1*(1 - snne_norm) + w2*S2
-if cp_accept(S): 
+if cp_accept(S):
     if S >= tau_accept: return ACCEPT
 if tau_accept - delta <= S < tau_accept: return REFINE
 return ABSTAIN
@@ -721,7 +721,3 @@ Return a corrected, concise answer with citations where relevant.
 | CP_TARGET_MIS              |    0.05 | start M1.5                             |                      |
 | TOOL_BUDGET_PER_TURN       |       4 | guardrail                              |                      |
 | TOOL_BUDGET_PER_REFINEMENT |       2 | guardrail                              |                      |
-
- 
-
- 

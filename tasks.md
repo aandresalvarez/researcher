@@ -260,23 +260,23 @@ M3 Exit Criteria
   - Done: adapter + helper utilities landed; follow-up doc section pending under Documentation backlog.
 - [ ] Embedding/cache strategy: shared vector cache, eviction policy, degrade modes (PRD §5/§12)
 ### PCN & GoV Completion Plan
-- [ ] Design PCN verification services including provenance storage, renderer callbacks, and failure handling (PRD §7.8).  
-  - Owner: AI Safety | ETA: 3d | Deps: tool outputs, renderer contract  
+- [ ] Design PCN verification services including provenance storage, renderer callbacks, and failure handling (PRD §7.8).
+  - Owner: AI Safety | ETA: 3d | Deps: tool outputs, renderer contract
   - Notes: implement verification queue, passthrough to renderer, structured logs; update SSE `pcn` events.
-- [ ] Implement GoV DAG execution with premise verification and failure propagation (PRD §7.9).  
-  - Owner: Reasoning | ETA: 3d | Deps: PCN service, retriever evidence  
+- [ ] Implement GoV DAG execution with premise verification and failure propagation (PRD §7.9).
+  - Owner: Reasoning | ETA: 3d | Deps: PCN service, retriever evidence
   - Notes: parse DAG, verify nodes, emit `gov` deltas, integrate with refinement issues.
-- [ ] Extend refinement loop to generate PCN/GoV artifacts and enforce fail-closed behavior (PRD §7.5/7.8/7.9).  
-  - Owner: Platform | ETA: 2d | Deps: above modules  
+- [ ] Extend refinement loop to generate PCN/GoV artifacts and enforce fail-closed behavior (PRD §7.5/7.8/7.9).
+  - Owner: Platform | ETA: 2d | Deps: above modules
   - Notes: ensure numeric claims stream only after verification; add retry policies.
 
 ### Production Hybrid RAG & Calibration Plan
-- [ ] Integrate production embedding model (E5/BGE) with caching and shard support (PRD §7.7).  
-  - Owner: Retrieval | ETA: 4d | Deps: vector infra  
+- [ ] Integrate production embedding model (E5/BGE) with caching and shard support (PRD §7.7).
+  - Owner: Retrieval | ETA: 4d | Deps: vector infra
   - Notes: wire to new service, maintain hashing fallback; update tests.
-- [ ] Add external corpus ingestion pipeline (BM25 + dense + KG features) and recall tuning (PRD §7.7).  
-  - Owner: Retrieval | ETA: 5d | Deps: embedding service, KG data  
+- [ ] Add external corpus ingestion pipeline (BM25 + dense + KG features) and recall tuning (PRD §7.7).
+  - Owner: Retrieval | ETA: 5d | Deps: embedding service, KG data
   - Notes: implement ingestion script, n-gram filters, KG boosts, recall evals.
-- [ ] Recalibrate SNNE/CP with updated retrieval + LLM outputs; update `cp_reference` quantiles (PRD §7.2, §7.10).  
-  - Owner: Eval | ETA: 3d | Deps: new RAG pipeline  
+- [ ] Recalibrate SNNE/CP with updated retrieval + LLM outputs; update `cp_reference` quantiles (PRD §7.2, §7.10).
+  - Owner: Eval | ETA: 3d | Deps: new RAG pipeline
   - Notes: run evaluation suites (UQ-A1, CP-B1), publish quantiles, refresh thresholds.
