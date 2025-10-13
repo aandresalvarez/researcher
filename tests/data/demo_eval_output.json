@@ -1,0 +1,7 @@
+{
+  "records": [
+    {"question": "Example analytics", "domain": "analytics", "S": 0.91, "accepted": true, "correct": true},
+    {"question": "Analytics false accept", "domain": "analytics", "S": 0.905, "accepted": true, "correct": false},
+    {"question": "Biomed safe", "domain": "biomed", "S": 0.89, "accepted": false, "correct": true}
+  ]
+}

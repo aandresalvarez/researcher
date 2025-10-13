@@ -1,0 +1,24 @@
+{
+  "items": [
+    {"S": 0.96, "accepted": true, "correct": true},
+    {"S": 0.955, "accepted": true, "correct": true},
+    {"S": 0.952, "accepted": true, "correct": true},
+    {"S": 0.948, "accepted": true, "correct": true},
+    {"S": 0.945, "accepted": true, "correct": true},
+    {"S": 0.942, "accepted": true, "correct": true},
+    {"S": 0.935, "accepted": true, "correct": true},
+    {"S": 0.93, "accepted": true, "correct": true},
+    {"S": 0.925, "accepted": true, "correct": true},
+    {"S": 0.92, "accepted": true, "correct": true},
+    {"S": 0.915, "accepted": true, "correct": true},
+    {"S": 0.91, "accepted": true, "correct": true},
+    {"S": 0.905, "accepted": true, "correct": false},
+    {"S": 0.902, "accepted": true, "correct": false},
+    {"S": 0.89, "accepted": false, "correct": true},
+    {"S": 0.88, "accepted": false, "correct": true},
+    {"S": 0.87, "accepted": false, "correct": false},
+    {"S": 0.86, "accepted": false, "correct": true},
+    {"S": 0.85, "accepted": false, "correct": false},
+    {"S": 0.84, "accepted": false, "correct": true}
+  ]
+}

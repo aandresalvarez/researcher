@@ -1,0 +1,8 @@
+{
+  "items": [
+    {"S": 0.92, "accepted": true, "correct": true},
+    {"S": 0.9, "accepted": true, "correct": true},
+    {"S": 0.88, "accepted": true, "correct": false},
+    {"S": 0.83, "accepted": false, "correct": true}
+  ]
+}
