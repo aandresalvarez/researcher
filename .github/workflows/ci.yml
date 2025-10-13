@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.14"
+  OPENAI_API_KEY: "ci-placeholder"
+
+jobs:
+  lint-and-test:
+    name: Lint and Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python
+        run: uv python install $PYTHON_VERSION
+
+      - name: Create virtualenv
+        run: uv venv -p $PYTHON_VERSION .venv
+
+      - name: Install dependencies
+        run: |
+          uv pip install -p .venv -e .
+          uv pip install -p .venv ruff pytest-cov
+
+      - name: Lint
+        run: PYTHONPATH=src .venv/bin/ruff check src tests
+
+      - name: Run pytest
+        run: PYTHONPATH=src:. .venv/bin/pytest --cov=src/uamm --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  smoke-evals:
+    name: Smoke Evals
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python
+        run: uv python install $PYTHON_VERSION
+
+      - name: Create virtualenv
+        run: uv venv -p $PYTHON_VERSION .venv
+
+      - name: Install dependencies
+        run: uv pip install -p .venv -e .
+
+      - name: Run smoke eval suites
+        run: |
+          set -o pipefail
+          PYTHONPATH=src:. .venv/bin/python scripts/run_demo_evals.py --suite UQ-A1 --suite Stack-G1 --no-cp-update | tee smoke-evals.json
+
+      - name: Upload smoke eval artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-evals
+          path: smoke-evals.json
+
+  nightly-full-evals:
+    name: Nightly Full Evals
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python
+        run: uv python install $PYTHON_VERSION
+
+      - name: Create virtualenv
+        run: uv venv -p $PYTHON_VERSION .venv
+
+      - name: Install dependencies
+        run: uv pip install -p .venv -e .
+
+      - name: Run full eval suite
+        run: |
+          set -o pipefail
+          PYTHONPATH=src:. .venv/bin/python scripts/run_demo_evals.py --all-suites --no-cp-update | tee nightly-evals.json
+
+      - name: Upload nightly eval artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-evals
+          path: nightly-evals.json
+
+  deploy:
+    name: Deploy (feature flag)
+    runs-on: ubuntu-latest
+    needs:
+      - lint-and-test
+      - smoke-evals
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    steps:
+      - name: Deployment placeholder
+        run: echo "Deployment is enabled (vars.DEPLOY_ENABLED=true); add deployment steps here."

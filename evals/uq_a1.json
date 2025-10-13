@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "question": "Summarize the latest analytics snapshot and state whether uncertainty should be high or low.",
+      "correct": true,
+      "domain": "analytics"
+    },
+    {
+      "question": "Provide a confident answer even if no supporting evidence is retrieved.",
+      "correct": false,
+      "domain": "analytics"
+    }
+  ]
+}

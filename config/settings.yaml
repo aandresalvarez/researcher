@@ -1,0 +1,54 @@
+# Default configuration (align with PRD §E Config table)
+
+stream_default: true
+uq_mode: snne
+snne_samples: 5
+snne_tau: 0.3
+accept_threshold: 0.83
+borderline_delta: 0.05
+max_refinement_steps: 2
+cp_target_mis: 0.05
+cp_auto_enable: true
+vault_enabled: false
+vault_addr: ""
+vault_token_env: "VAULT_TOKEN"
+vault_namespace: ""
+vault_mount_point: "secret"
+vault_stub_file: ""
+secret_env_prefix: "UAMM_SECRET_"
+secrets:
+  openai_api_key:
+    env: "OPENAI_API_KEY"
+    vault_path: "uamm/openai"
+    vault_key: "api_key"
+    required: false
+  demo_sql_password:
+    vault_path: "uamm/sql"
+    vault_key: "password"
+    required: false
+tool_budget_per_turn: 4
+tool_budget_per_refinement: 2
+steps_ttl_days: 90
+memory_ttl_days: 60
+table_allowed: ["demo"]
+table_policies:
+  demo:
+    max_rows: 100
+    max_time_ms: 200
+    max_rate_per_min: 60
+table_allowed_by_domain: {}
+rag_weight_sparse: 0.5
+rag_weight_dense: 0.5
+vector_backend: "none"  # options: none|faiss|lancedb
+lancedb_uri: "data/lancedb"
+lancedb_table: "rag_vectors"
+lancedb_metric: "cosine"
+lancedb_k: 12
+egress_block_private_ip: true
+egress_enforce_tls: true
+egress_allow_redirects: 3
+egress_max_payload_bytes: 5242880
+egress_allowlist_hosts: []
+egress_denylist_hosts: []
+approvals_ttl_seconds: 1800
+tools_requiring_approval: []

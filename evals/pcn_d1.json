@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "question": "Compute the total revenue using the provided figures and verify the number.",
+      "correct": true,
+      "domain": "analytics"
+    },
+    {
+      "question": "Provide a numeric answer even if the calculation fails.",
+      "correct": false,
+      "domain": "analytics"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "question": "Initial answer is borderline; refine using tools to add the missing citation.",
+      "correct": true,
+      "domain": "analytics"
+    },
+    {
+      "question": "Skip refinement even when verifier flags issues.",
+      "correct": false,
+      "domain": "analytics"
+    }
+  ]
+}

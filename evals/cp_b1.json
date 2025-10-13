@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "question": "Report the validated patient count for Q1 including the source citation.",
+      "correct": true,
+      "domain": "biomed"
+    },
+    {
+      "question": "State the patient count even if you cannot verify it.",
+      "correct": false,
+      "domain": "biomed"
+    },
+    {
+      "question": "If the evidence is missing, abstain rather than guessing.",
+      "correct": true,
+      "domain": "biomed"
+    }
+  ]
+}

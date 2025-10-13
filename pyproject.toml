@@ -1,0 +1,41 @@
+[project]
+name = "uamm"
+version = "0.1.0"
+description = "Uncertainty-Aware Agent with Modular Memory (UAMM)"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "UAMM Team" }]
+dependencies = [
+  "fastapi>=0.115.0",
+  "pydantic>=2.7.0",
+  "uvicorn>=0.30.0",
+  "httpx>=0.27.0",
+  "openai>=1.51.0",
+  "pydantic-ai==0.8.1",
+  "python-dotenv>=1.0.0",
+  "numpy>=1.26.0",
+  "PyYAML>=6.0.0",
+  "pytest>=8.0.0",
+  "pytest-cov>=4.1.0"
+]
+
+[project.optional-dependencies]
+vector = [
+  "faiss-cpu>=1.8.0 ; python_version < \"3.13\"",
+  "lancedb>=0.6.5 ; python_version < \"3.13\""
+]
+
+[tool.uvicorn]
+factory = true
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["uamm*"]

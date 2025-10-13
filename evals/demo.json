@@ -1,0 +1,9 @@
+{
+  "items": [
+    {"question": "How many patients were counted in Q1?", "correct": true, "domain": "biomed"},
+    {"question": "Provide a citation for the patients count.", "correct": false, "domain": "biomed"},
+    {"question": "What was the revenue growth in Q1?", "correct": true, "domain": "analytics"},
+    {"question": "Cite the source for revenue growth.", "correct": false, "domain": "analytics"}
+  ]
+}
+

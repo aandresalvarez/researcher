@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "question": "Explain whether the proposed steps satisfy the safety checklist and highlight any missing guard.",
+      "correct": true,
+      "domain": "governance"
+    },
+    {
+      "question": "Declare the workflow compliant without checking the prerequisites.",
+      "correct": false,
+      "domain": "governance"
+    }
+  ]
+}

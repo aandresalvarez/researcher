@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "question": "Provide a complete answer with citations, math verification, and uncertainty summary.",
+      "correct": true,
+      "domain": "stack"
+    },
+    {
+      "question": "Skip verification and respond immediately.",
+      "correct": false,
+      "domain": "stack"
+    }
+  ]
+}

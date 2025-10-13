@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Env
+.env
+.env.*
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Data/Indexes
+data/
+*.faiss
+*.sqlite
+*.db
+
+# IDE
+.vscode/
+.idea/
+

@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "question": "Use retrieved memory to list the top three metrics that moved last quarter.",
+      "correct": true,
+      "domain": "analytics"
+    },
+    {
+      "question": "Answer without looking at the documents.",
+      "correct": false,
+      "domain": "analytics"
+    }
+  ]
+}
