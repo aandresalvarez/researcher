@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple, Optional
 
 from uamm.uq.snne import snne as snne_score, normalize as snne_normalize
 from uamm.uq.sampling import generate_answer_variants
@@ -18,6 +18,9 @@ class PlanningConfig:
     mcts_branch: int = 2  # children per expansion
 
 
+DEFAULT_DOMAIN = "default"
+
+
 def _score_candidate(
     *,
     candidate: str,
@@ -28,6 +31,7 @@ def _score_candidate(
     snne_calibrator: Any | None,
     verifier: Any,
     policy_cfg: PolicyConfig,
+    domain: str = DEFAULT_DOMAIN,
 ) -> Tuple[float, float | None, List[str], float, List[str], bool]:
     """Return (s1_norm, raw_snne, snne_samples, s2, issues, needs_fix)."""
     try:
@@ -39,7 +43,9 @@ def _score_candidate(
         )
         raw = snne_score(samples, 0.3, embed=embed)
         if snne_calibrator is not None:
-            s1 = snne_calibrator.normalize(domain="default", raw=raw)
+            # Respect caller-provided domain for calibration; fall back handled by calibrator
+            dom = (domain or DEFAULT_DOMAIN).lower()
+            s1 = snne_calibrator.normalize(domain=dom, raw=raw)
         else:
             s1 = snne_normalize(raw)
     except Exception:
@@ -71,6 +77,7 @@ def plan_best_answer(
     policy_cfg: PolicyConfig,
     sample_count: int = 3,
     config: PlanningConfig | None = None,
+    domain: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Heuristic planning: propose answer variants and pick best by policy score.
 
@@ -117,6 +124,7 @@ def plan_best_answer(
                     snne_calibrator=snne_calibrator,
                     verifier=verifier,
                     policy_cfg=policy_cfg,
+                    domain=(domain or DEFAULT_DOMAIN),
                 )
                 S = final_score(snne_norm=float(s1), s2=float(s2), cfg=policy_cfg)
                 scored_local.append((float(S), cand))
@@ -161,6 +169,7 @@ def plan_best_answer(
                     snne_calibrator=snne_calibrator,
                     verifier=verifier,
                     policy_cfg=policy_cfg,
+                    domain=(domain or DEFAULT_DOMAIN),
                 )
                 S = final_score(snne_norm=float(s1), s2=float(s2), cfg=policy_cfg)
                 if best_child is None or float(S) > float(best_child_S or 0.0):
@@ -180,6 +189,7 @@ def plan_best_answer(
                     snne_calibrator=snne_calibrator,
                     verifier=verifier,
                     policy_cfg=policy_cfg,
+                    domain=(domain or DEFAULT_DOMAIN),
                 )
                 S_b = final_score(snne_norm=float(s1_b), s2=float(s2_b), cfg=policy_cfg)
                 if float(best_child_S or 0.0) > float(S_b):
@@ -212,6 +222,7 @@ def plan_best_answer(
             snne_calibrator=snne_calibrator,
             verifier=verifier,
             policy_cfg=policy_cfg,
+            domain=(domain or DEFAULT_DOMAIN),
         )
         S = final_score(snne_norm=float(s1), s2=float(s2), cfg=policy_cfg)
         scored.append(
