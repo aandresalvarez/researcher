@@ -69,12 +69,19 @@ def test_upload_file_endpoint_txt(tmp_path, monkeypatch):
 
     # Use editor role via monkeypatched lookup
     from uamm.security.auth import APIKeyRecord
+
     editor_key = "wk_editor"
 
     def fake_lookup_key(db_path: str, token: str):
         if token == editor_key:
             return APIKeyRecord(
-                id="1", workspace="wsX", key_hash="h", role="editor", label="editX", active=True, created=0.0
+                id="1",
+                workspace="wsX",
+                key_hash="h",
+                role="editor",
+                label="editX",
+                active=True,
+                created=0.0,
             )
         return None
 
@@ -87,12 +94,22 @@ def test_upload_file_endpoint_txt(tmp_path, monkeypatch):
             "/rag/upload-file",
             headers={"Authorization": f"Bearer {editor_key}"},
             data={"filename": "note.txt"},
-            files={"file": (None, b"hello mitochondria in upload", "application/octet-stream")},
+            files={
+                "file": (
+                    None,
+                    b"hello mitochondria in upload",
+                    "application/octet-stream",
+                )
+            },
         )
         assert r.status_code == 200
         data = r.json()
         assert data.get("ingested", 0) >= 1
-        sr = client.get("/rag/search", headers={"Authorization": f"Bearer {editor_key}"}, params={"q": "mitochondria"})
+        sr = client.get(
+            "/rag/search",
+            headers={"Authorization": f"Bearer {editor_key}"},
+            params={"q": "mitochondria"},
+        )
         assert sr.status_code == 200
         assert sr.json()["hits"], "uploaded doc should be searchable"
 
@@ -107,12 +124,19 @@ def test_upload_files_endpoint_txts(tmp_path, monkeypatch):
     app = create_app()
 
     from uamm.security.auth import APIKeyRecord
+
     editor_key = "wk_editor"
 
     def fake_lookup_key(db_path: str, token: str):
         if token == editor_key:
             return APIKeyRecord(
-                id="1", workspace="teamX", key_hash="h", role="editor", label="edX", active=True, created=0.0
+                id="1",
+                workspace="teamX",
+                key_hash="h",
+                role="editor",
+                label="edX",
+                active=True,
+                created=0.0,
             )
         return None
 
@@ -134,13 +158,18 @@ def test_upload_files_endpoint_txts(tmp_path, monkeypatch):
         data = r.json()
         assert data.get("saved", 0) >= 2
         sr = client.get(
-            "/rag/search", headers={"Authorization": f"Bearer {editor_key}"}, params={"q": "mitochondria"}
+            "/rag/search",
+            headers={"Authorization": f"Bearer {editor_key}"},
+            params={"q": "mitochondria"},
         )
         assert sr.status_code == 200
         assert sr.json()["hits"], "at least one uploaded doc should be searchable"
 
 
-@pytest.mark.skipif(pytest.importorskip("docx", reason="python-docx not installed") is None, reason="python-docx not installed")
+@pytest.mark.skipif(
+    pytest.importorskip("docx", reason="python-docx not installed") is None,
+    reason="python-docx not installed",
+)
 def test_ingest_docx_and_search(tmp_path):
     db = _setup_app(tmp_path)
     docs = tmp_path / "docs"
@@ -175,7 +204,9 @@ def test_pdf_ocr_fallback_monkeypatched(tmp_path, monkeypatch):
     docs.mkdir()
     pdf_path = docs / "scan.pdf"
     # Minimal PDF header to simulate a file; actual parsing will fail -> None
-    pdf_path.write_bytes(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\nstartxref\n0\n%%EOF")
+    pdf_path.write_bytes(
+        b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\nstartxref\n0\n%%EOF"
+    )
 
     from uamm.config.settings import Settings
 
@@ -187,7 +218,9 @@ def test_pdf_ocr_fallback_monkeypatched(tmp_path, monkeypatch):
 
     # Force parse_pdf to return None then supply OCR content
     monkeypatch.setattr("uamm.rag.ingest._parse_pdf", lambda p: None)
-    monkeypatch.setattr("uamm.rag.ingest._ocr_pdf", lambda p: "ocr extracted mitochondria text")
+    monkeypatch.setattr(
+        "uamm.rag.ingest._ocr_pdf", lambda p: "ocr extracted mitochondria text"
+    )
 
     did = ingest_file(db, str(pdf_path), settings=settings)
     assert did is not None

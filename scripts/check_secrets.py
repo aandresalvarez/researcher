@@ -89,10 +89,12 @@ def main(argv: list[str]) -> int:
     print("Secret scan failed; potential secrets detected:\n", file=sys.stderr)
     for label, path, ln, snippet in violations:
         print(f" - [{label}] {path}:{ln}: {snippet}", file=sys.stderr)
-    print("\nIf this is a false positive, add '# allow-secret' to the line.", file=sys.stderr)
+    print(
+        "\nIf this is a false positive, add '# allow-secret' to the line.",
+        file=sys.stderr,
+    )
     return 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
-

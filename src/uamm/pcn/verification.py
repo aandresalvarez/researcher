@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from uamm.tools.math_eval import math_eval
+from uamm.pcn.units import validate_numeric_unit
 
 
 class VerificationError(RuntimeError):
@@ -84,6 +85,13 @@ class PCNVerifier:
                 raise VerificationError(
                     f"value {value} differs from expected {expected} (tol={tolerance})"
                 )
+            # Optional unit validation
+            units = (
+                entry.policy.get("units") if isinstance(entry.policy, dict) else None
+            )
+            if units:
+                if not validate_numeric_unit(value, str(units)):
+                    raise VerificationError(f"invalid_units:{units}")
         except Exception as exc:
             entry.status = "failed"
             entry.reason = str(exc)
@@ -96,6 +104,13 @@ class PCNVerifier:
         entry = self._require_entry(token_id)
         try:
             numeric = float(value)
+            # Optional unit validation
+            units = (
+                entry.policy.get("units") if isinstance(entry.policy, dict) else None
+            )
+            if units:
+                if not validate_numeric_unit(numeric, str(units)):
+                    raise VerificationError(f"invalid_units:{units}")
         except Exception as exc:
             entry.status = "failed"
             entry.reason = f"not numeric: {exc}"

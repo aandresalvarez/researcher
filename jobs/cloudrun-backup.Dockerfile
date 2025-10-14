@@ -8,4 +8,3 @@ COPY scripts/gcs_backup.py /app/gcs_backup.py
 # Cloud Run Jobs can pass args; default just shows help
 ENTRYPOINT ["python", "/app/gcs_backup.py"]
 CMD ["--help"]
-

@@ -59,7 +59,9 @@ def ensure_migrations(db_path: str) -> None:
             conn.execute("ALTER TABLE memory ADD COLUMN created_by TEXT")
             conn.commit()
         try:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_workspace ON memory(workspace)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_workspace ON memory(workspace)"
+            )
             conn.commit()
         except Exception:
             pass

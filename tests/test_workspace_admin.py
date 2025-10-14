@@ -25,11 +25,23 @@ def test_workspace_member_crud_and_audit(tmp_path, monkeypatch):
     def fake_lookup_key(db_path: str, token: str):
         if token == admin_key:
             return APIKeyRecord(
-                id="1", workspace="team1", key_hash="h1", role="admin", label="admin1", active=True, created=0.0
+                id="1",
+                workspace="team1",
+                key_hash="h1",
+                role="admin",
+                label="admin1",
+                active=True,
+                created=0.0,
             )
         if token == editor_key:
             return APIKeyRecord(
-                id="2", workspace="team1", key_hash="h2", role="editor", label="ed1", active=True, created=0.0
+                id="2",
+                workspace="team1",
+                key_hash="h2",
+                role="editor",
+                label="ed1",
+                active=True,
+                created=0.0,
             )
         return None
 
@@ -37,7 +49,11 @@ def test_workspace_member_crud_and_audit(tmp_path, monkeypatch):
 
     with TestClient(app) as client:
         # Create workspace (no-op if exists) and add members
-        r = client.post("/workspaces", headers={"Authorization": f"Bearer {admin_key}"}, json={"slug": "team1", "name": "Team 1"})
+        r = client.post(
+            "/workspaces",
+            headers={"Authorization": f"Bearer {admin_key}"},
+            json={"slug": "team1", "name": "Team 1"},
+        )
         assert r.status_code == 200
         m = client.post(
             "/workspaces/team1/members",
@@ -46,9 +62,12 @@ def test_workspace_member_crud_and_audit(tmp_path, monkeypatch):
         )
         assert m.status_code == 200
         lst = client.get(
-            "/workspaces/team1/members", headers={"Authorization": f"Bearer {admin_key}"}
+            "/workspaces/team1/members",
+            headers={"Authorization": f"Bearer {admin_key}"},
         )
-        assert lst.status_code == 200 and any(x["user_id"] == "alice" for x in lst.json()["members"]) 
+        assert lst.status_code == 200 and any(
+            x["user_id"] == "alice" for x in lst.json()["members"]
+        )
 
         # Editor writes some memory and a doc
         mm = client.post(
@@ -66,9 +85,12 @@ def test_workspace_member_crud_and_audit(tmp_path, monkeypatch):
 
         # Audit shows contributions
         au = client.get(
-            "/audit/contributions", headers={"Authorization": f"Bearer {admin_key}", "X-Workspace": "team1"}
+            "/audit/contributions",
+            headers={"Authorization": f"Bearer {admin_key}", "X-Workspace": "team1"},
         )
         assert au.status_code == 200
         body = au.json()
         assert body["workspace"] == "team1"
-        assert any(it["n"] >= 1 for it in body["memory"]) or any(it["n"] >= 1 for it in body["corpus"])
+        assert any(it["n"] >= 1 for it in body["memory"]) or any(
+            it["n"] >= 1 for it in body["corpus"]
+        )

@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from .routes import router as api_router
@@ -38,9 +39,13 @@ class WorkspaceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Simple workspace/user context from headers; defaults are safe
         if not hasattr(request.state, "workspace"):
-            request.state.workspace = request.headers.get("X-Workspace", "default").strip() or "default"
+            request.state.workspace = (
+                request.headers.get("X-Workspace", "default").strip() or "default"
+            )
         if not hasattr(request.state, "user"):
-            request.state.user = request.headers.get("X-User", "anonymous").strip() or "anonymous"
+            request.state.user = (
+                request.headers.get("X-User", "anonymous").strip() or "anonymous"
+            )
         return await call_next(request)
 
 
@@ -74,7 +79,9 @@ class WorkspacePathMiddleware(BaseHTTPMiddleware):
         # Resolve per-workspace paths (db/docs/vectors) based on workspace record
         try:
             settings = request.app.state.settings
-            slug = getattr(request.state, "workspace", None) or request.headers.get("X-Workspace", "default")
+            slug = getattr(request.state, "workspace", None) or request.headers.get(
+                "X-Workspace", "default"
+            )
             paths = ws_resolve_paths(settings.db_path, slug, settings)
             # Attach to request.state for downstream usage
             request.state.db_path = paths.get("db_path", settings.db_path)
@@ -96,7 +103,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         # Determine workspace identifier for scoping
         from uamm.security.auth import parse_bearer, lookup_key
-        ws = request.headers.get("X-Workspace") or getattr(request.state, "workspace", None)
+
+        ws = request.headers.get("X-Workspace") or getattr(
+            request.state, "workspace", None
+        )
         if not ws:
             token = parse_bearer(request.headers.get("Authorization"))
             if token:
@@ -110,6 +120,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             limiter = {}
             setattr(request.app.state, "rate_limiter", limiter)
         import time as _t
+
         # Select per-role or global limit
         role = getattr(request.state, "role", None)
         per_min = None
@@ -133,33 +144,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         counts[role_key] = int(counts.get(role_key, 0)) + 1
         total = sum(int(v or 0) for v in counts.values())
         # Enforce per-role first, then global
-        if counts[role_key] > per_min or total > getattr(settings, "rate_limit_per_minute", 120) * 10_000:
+        if (
+            counts[role_key] > per_min
+            or total > getattr(settings, "rate_limit_per_minute", 120) * 10_000
+        ):
             from fastapi import HTTPException
+
             raise HTTPException(status_code=429, detail="rate_limit_exceeded")
         return await call_next(request)
 
 
 def create_app() -> FastAPI:
-    description = (
-        "Uncertainty-Aware Agent with Modular Memory (UAMM). "
-        "Provides grounded answers with SNNE uncertainty quantification, conformal policies, "
-        "tool-assisted refinements, and streaming SSE responses."
-    )
-    app = FastAPI(
-        title="UAMM API",
-        version="0.1.0",
-        description=description,
-        docs_url="/docs",
-        redoc_url="/redoc",
-    )
-    app.add_middleware(RequestIDMiddleware)
-    app.add_middleware(AuthMiddleware)
-    app.add_middleware(WorkspaceMiddleware)
-    app.add_middleware(WorkspacePathMiddleware)
-    app.add_middleware(RateLimitMiddleware)
-
-    @app.on_event("startup")
-    async def _startup() -> None:
+    # Define a single lifespan that encapsulates startup/shutdown
+    @asynccontextmanager
+    async def lifespan(app_obj: FastAPI):
+        # STARTUP
         settings = load_settings()
         app.state.settings = settings
         secret_manager = SecretManager.from_settings(settings)
@@ -183,7 +182,6 @@ def create_app() -> FastAPI:
                 },
             )
         app.state.secrets = secret_manager
-        # Create base schema, then apply migrations (adds new columns), then rerun schema to ensure triggers/virtual tables exist
         ensure_schema(settings.db_path, settings.schema_path)
         ensure_migrations(settings.db_path)
         app.state.idem_store = IdempotencyStore()
@@ -194,7 +192,6 @@ def create_app() -> FastAPI:
         app.state.tuner_store = TunerProposalStore(
             ttl_seconds=getattr(settings, "tuner_proposal_ttl_seconds", 3600)
         )
-        # initialize metrics
         buckets = {"0.1": 0, "0.5": 0, "1": 0, "2.5": 0, "6": 0, "+Inf": 0}
         app.state.metrics = {
             "requests": 0,
@@ -216,31 +213,55 @@ def create_app() -> FastAPI:
                 "max_pending_age": 0.0,
             },
         }
-        # launch TTL cleaner
         import asyncio
+        import sqlite3 as _sqlite3
 
         async def _multi_ttl_cleaner():
-            import sqlite3 as _sqlite3
             steps_ttl_days = int(getattr(settings, "steps_ttl_days", 90))
             memory_ttl_days = int(getattr(settings, "memory_ttl_days", 60))
             interval = int(getattr(settings, "docs_scan_interval_seconds", 60)) or 60
             from datetime import timedelta
+
             steps_ttl = timedelta(days=steps_ttl_days).total_seconds()
             mem_ttl = timedelta(days=memory_ttl_days).total_seconds()
             while True:
                 try:
                     import time as _t
+
                     now = _t.time()
-                    # Clean index DB (harmless if tables are empty)
                     try:
                         con = _sqlite3.connect(settings.db_path)
                         with con:
-                            con.execute("DELETE FROM steps WHERE ts < ?", (now - steps_ttl,))
-                            con.execute("DELETE FROM memory WHERE ts < ?", (now - mem_ttl,))
+                            con.execute(
+                                "DELETE FROM steps WHERE ts < ?", (now - steps_ttl,)
+                            )
+                            con.execute(
+                                "DELETE FROM memory WHERE ts < ?", (now - mem_ttl,)
+                            )
                         con.close()
                     except Exception:
                         pass
-                    # Clean each workspace DB
+                    try:
+                        from uamm.memory.promote import (
+                            promote_episodic_to_semantic as _prom,
+                        )
+
+                        if getattr(settings, "memory_promotion_enabled", False):
+                            stats = _prom(
+                                settings.db_path,
+                                min_support=int(
+                                    getattr(settings, "memory_promotion_min_support", 3)
+                                    or 3
+                                ),
+                            )
+                            mem = app.state.metrics.setdefault(
+                                "memory", {"promotions": 0}
+                            )
+                            mem["promotions"] = int(mem.get("promotions", 0)) + int(
+                                stats.promoted
+                            )
+                    except Exception:
+                        pass
                     try:
                         con = _sqlite3.connect(settings.db_path)
                         con.row_factory = _sqlite3.Row
@@ -255,8 +276,14 @@ def create_app() -> FastAPI:
                             try:
                                 c2 = _sqlite3.connect(dbp)
                                 with c2:
-                                    c2.execute("DELETE FROM steps WHERE ts < ?", (now - steps_ttl,))
-                                    c2.execute("DELETE FROM memory WHERE ts < ?", (now - mem_ttl,))
+                                    c2.execute(
+                                        "DELETE FROM steps WHERE ts < ?",
+                                        (now - steps_ttl,),
+                                    )
+                                    c2.execute(
+                                        "DELETE FROM memory WHERE ts < ?",
+                                        (now - mem_ttl,),
+                                    )
                                 c2.close()
                             except Exception:
                                 continue
@@ -267,50 +294,58 @@ def create_app() -> FastAPI:
                 await asyncio.sleep(max(30, interval))
 
         app.state.ttl_task = asyncio.create_task(_multi_ttl_cleaner())
-
-        # Optional background docs folder scanner
         if getattr(settings, "docs_auto_ingest", True):
+
             async def _docs_watcher():
                 try:
                     while True:
                         try:
-                            # If workspaces exist with roots, scan each workspace docs dir; otherwise scan global docs_dir
-                            import sqlite3 as _sqlite3
                             from pathlib import Path as _Path
+
                             try:
                                 con = _sqlite3.connect(settings.db_path)
                                 con.row_factory = _sqlite3.Row
-                                rows = con.execute("SELECT slug FROM workspaces").fetchall()
+                                rows = con.execute(
+                                    "SELECT slug FROM workspaces"
+                                ).fetchall()
                                 con.close()
                             except Exception:
                                 rows = []
                             if rows:
                                 for r in rows:
                                     slug = r["slug"]
-                                    paths = ws_resolve_paths(settings.db_path, slug, settings)
+                                    paths = ws_resolve_paths(
+                                        settings.db_path, slug, settings
+                                    )
                                     docs_dir = paths.get("docs_dir")
                                     dbp = paths.get("db_path")
                                     if not docs_dir or not dbp:
                                         continue
                                     try:
                                         if _Path(docs_dir).exists():
-                                            scan_folder(dbp, docs_dir, settings=settings)
+                                            scan_folder(
+                                                dbp, docs_dir, settings=settings
+                                            )
                                     except Exception:
                                         continue
                             else:
-                                scan_folder(settings.db_path, settings.docs_dir, settings=settings)
-                        except Exception as exc:  # pragma: no cover - best effort
+                                scan_folder(
+                                    settings.db_path,
+                                    settings.docs_dir,
+                                    settings=settings,
+                                )
+                        except Exception as exc:
                             logging.getLogger("uamm.rag.ingest").warning(
                                 "docs_scan_failed", extra={"error": str(exc)}
                             )
-                        await asyncio.sleep(max(5, int(settings.docs_scan_interval_seconds)))
+                        await asyncio.sleep(
+                            max(5, int(settings.docs_scan_interval_seconds))
+                        )
                 except Exception:
-                    # exit silently on shutdown/cancel
                     return
 
             app.state.docs_task = asyncio.create_task(_docs_watcher())
 
-        # CP threshold supplier for default domain
         def _tau_supplier(domain: str = "default"):
             cache = getattr(app.state, "cp_cache", None)
             target = settings.cp_target_mis
@@ -327,10 +362,14 @@ def create_app() -> FastAPI:
             return tau
 
         app.state.cp_tau_supplier = _tau_supplier
-        # Seed admin API key on first run if enabled
         if getattr(settings, "seed_admin_enabled", False):
             try:
-                if count_keys(settings.db_path, workspace=settings.seed_admin_workspace) == 0:
+                if (
+                    count_keys(
+                        settings.db_path, workspace=settings.seed_admin_workspace
+                    )
+                    == 0
+                ):
                     if settings.seed_admin_key:
                         insert_api_key(
                             settings.db_path,
@@ -339,12 +378,10 @@ def create_app() -> FastAPI:
                             label=settings.seed_admin_label,
                             token=settings.seed_admin_key,
                         )
-                        logging.getLogger("uamm.auth").warning(
-                            "seed_admin_key_inserted",
-                            extra={"workspace": settings.seed_admin_workspace, "label": settings.seed_admin_label},
-                        )
                     elif getattr(settings, "seed_admin_autogen", False):
-                        token = new_key(prefix=getattr(settings, "api_key_prefix", "wk_"))
+                        token = new_key(
+                            prefix=getattr(settings, "api_key_prefix", "wk_")
+                        )
                         insert_api_key(
                             settings.db_path,
                             workspace=settings.seed_admin_workspace,
@@ -352,24 +389,40 @@ def create_app() -> FastAPI:
                             label=settings.seed_admin_label,
                             token=token,
                         )
-                        # Only log the actual token in non-prod envs
-                        if str(getattr(settings, "env", "dev")).lower() in {"dev", "test"}:
-                            logging.getLogger("uamm.auth").warning(
-                                "seed_admin_key_generated",
-                                extra={"workspace": settings.seed_admin_workspace, "label": settings.seed_admin_label, "api_key": token},
-                            )
             except Exception as exc:
-                logging.getLogger("uamm.auth").error("seed_admin_failed", extra={"error": str(exc)})
+                logging.getLogger("uamm.auth").error(
+                    "seed_admin_failed", extra={"error": str(exc)}
+                )
+        # Yield control
+        try:
+            yield
+        finally:
+            # SHUTDOWN
+            task = getattr(app.state, "ttl_task", None)
+            if task:
+                task.cancel()
+            dtask = getattr(app.state, "docs_task", None)
+            if dtask:
+                dtask.cancel()
 
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        task = getattr(app.state, "ttl_task", None)
-        if task:
-            task.cancel()
-        dtask = getattr(app.state, "docs_task", None)
-        if dtask:
-            dtask.cancel()
-
+    description = (
+        "Uncertainty-Aware Agent with Modular Memory (UAMM). "
+        "Provides grounded answers with SNNE uncertainty quantification, conformal policies, "
+        "tool-assisted refinements, and streaming SSE responses."
+    )
+    app = FastAPI(
+        title="UAMM API",
+        version="0.1.0",
+        description=description,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        lifespan=lifespan,
+    )
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(AuthMiddleware)
+    app.add_middleware(WorkspaceMiddleware)
+    app.add_middleware(WorkspacePathMiddleware)
+    app.add_middleware(RateLimitMiddleware)
     app.include_router(api_router)
     return app
 

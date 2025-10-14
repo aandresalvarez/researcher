@@ -35,16 +35,38 @@ def fmt_ts(ts: float | None) -> str:
 def main() -> int:
     p = argparse.ArgumentParser(description="Backup workspace bundle to GCS")
     p.add_argument("slug", help="Workspace slug to export")
-    p.add_argument("--base-url", default=os.getenv("UAMM_BASE_URL", "http://127.0.0.1:8000"))
+    p.add_argument(
+        "--base-url", default=os.getenv("UAMM_BASE_URL", "http://127.0.0.1:8000")
+    )
     p.add_argument("--api-key", default=os.getenv("UAMM_API_KEY"))
-    p.add_argument("--since", type=float, default=None, help="Export since ts (epoch seconds)")
-    p.add_argument("--until", type=float, default=None, help="Export until ts (epoch seconds)")
+    p.add_argument(
+        "--since", type=float, default=None, help="Export since ts (epoch seconds)"
+    )
+    p.add_argument(
+        "--until", type=float, default=None, help="Export until ts (epoch seconds)"
+    )
     p.add_argument("--bucket", default=os.getenv("UAMM_GCS_BUCKET"))
     p.add_argument("--prefix", default=os.getenv("UAMM_GCS_PREFIX", "backups"))
-    p.add_argument("--replace", action="store_true", help="Tag filename as replace bundle")
-    p.add_argument("--kms-key", default=os.getenv("UAMM_GCP_KMS_KEY"), help="Full KMS key resource name for envelope encryption (optional)")
-    p.add_argument("--retention-count", type=int, default=int(os.getenv("UAMM_GCS_RETENTION_COUNT", "0")), help="Keep the N most recent backups (0=disable)")
-    p.add_argument("--retention-days", type=int, default=int(os.getenv("UAMM_GCS_RETENTION_DAYS", "0")), help="Delete backups older than N days (0=disable)")
+    p.add_argument(
+        "--replace", action="store_true", help="Tag filename as replace bundle"
+    )
+    p.add_argument(
+        "--kms-key",
+        default=os.getenv("UAMM_GCP_KMS_KEY"),
+        help="Full KMS key resource name for envelope encryption (optional)",
+    )
+    p.add_argument(
+        "--retention-count",
+        type=int,
+        default=int(os.getenv("UAMM_GCS_RETENTION_COUNT", "0")),
+        help="Keep the N most recent backups (0=disable)",
+    )
+    p.add_argument(
+        "--retention-days",
+        type=int,
+        default=int(os.getenv("UAMM_GCS_RETENTION_DAYS", "0")),
+        help="Delete backups older than N days (0=disable)",
+    )
     args = p.parse_args()
 
     if storage is None:
@@ -75,7 +97,10 @@ def main() -> int:
     encrypted: Optional[bytes] = None
     if args.kms_key:
         if AESGCM is None or kms_v1 is None:
-            print("Encryption requested but dependencies missing (cryptography/google-cloud-kms)", flush=True)
+            print(
+                "Encryption requested but dependencies missing (cryptography/google-cloud-kms)",
+                flush=True,
+            )
             return 2
         try:
             # Generate DEK and wrap with KMS
@@ -110,10 +135,22 @@ def main() -> int:
     blob = bucket.blob(path)
     if encrypted is not None:
         blob.upload_from_string(encrypted, content_type="application/json")
-        print({"uploaded": f"gs://{args.bucket}/{path}", "bytes": len(encrypted), "encrypted": True})
+        print(
+            {
+                "uploaded": f"gs://{args.bucket}/{path}",
+                "bytes": len(encrypted),
+                "encrypted": True,
+            }
+        )
     else:
         blob.upload_from_string(content, content_type="application/zip")
-        print({"uploaded": f"gs://{args.bucket}/{path}", "bytes": len(content), "encrypted": False})
+        print(
+            {
+                "uploaded": f"gs://{args.bucket}/{path}",
+                "bytes": len(content),
+                "encrypted": False,
+            }
+        )
 
     # Retention: delete older backups beyond thresholds
     try:
@@ -121,11 +158,15 @@ def main() -> int:
         days = int(args.retention_days or 0)
         if count > 0 or days > 0:
             # List blobs for this workspace
-            prefix = (args.prefix.rstrip('/') + '/') if args.prefix else ''
+            prefix = (args.prefix.rstrip("/") + "/") if args.prefix else ""
             key_prefix = f"{prefix}workspace_{args.slug}_"
             blobs = list(client_gcs.list_blobs(args.bucket, prefix=key_prefix))
             # Filter to zip variants
-            blobs = [b for b in blobs if b.name.endswith('.zip') or b.name.endswith('.zip.enc.json')]
+            blobs = [
+                b
+                for b in blobs
+                if b.name.endswith(".zip") or b.name.endswith(".zip.enc.json")
+            ]
             # Sort newest first by updated
             blobs.sort(key=lambda b: b.updated, reverse=True)
             keep_set = set()
@@ -142,7 +183,11 @@ def main() -> int:
                     continue
                 if cutoff is not None:
                     # Convert to epoch seconds
-                    ts = b.updated.timestamp() if hasattr(b.updated, 'timestamp') else None
+                    ts = (
+                        b.updated.timestamp()
+                        if hasattr(b.updated, "timestamp")
+                        else None
+                    )
                     if ts is not None and ts >= cutoff:
                         continue  # still within retention window
                 # Delete

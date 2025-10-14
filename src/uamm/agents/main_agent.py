@@ -20,6 +20,7 @@ from uamm.refine.prompt import build_refinement_prompt
 from uamm.refine.compose import build_refined_answer
 from uamm.security.egress import EgressPolicy
 from uamm.security.prompt_guard import PromptInjectionError
+from uamm.planning.strategies import plan_best_answer, PlanningConfig
 from uamm.pcn.provenance import (
     build_url_provenance,
     build_math_provenance,
@@ -27,6 +28,8 @@ from uamm.pcn.provenance import (
 )
 from uamm.pcn.verification import PCNVerifier
 from uamm.gov.executor import evaluate_dag
+from uamm.verification.faithfulness import compute_faithfulness
+from uamm.security.guardrails import GuardrailsConfig, pre_guard, post_guard
 
 
 _PCN_PLACEHOLDER_RE = re.compile(r"\[PCN:[^\]]+\]")
@@ -112,7 +115,9 @@ class LLMGenerator:
             pydantic_ai = import_module("pydantic_ai")
             models_mod = import_module("pydantic_ai.models.openai")
             AgentCls = getattr(pydantic_ai, "Agent")
-            OpenAIModelCls = getattr(models_mod, "OpenAIModel")
+            OpenAIModelCls = getattr(models_mod, "OpenAIChatModel", None) or getattr(
+                models_mod, "OpenAIModel"
+            )
         except Exception as exc:  # pragma: no cover - dependency missing
             _LOGGER.warning("llm_agent_unavailable", extra={"error": str(exc)})
             self._agent = None
@@ -358,13 +363,26 @@ class MainAgent:
         # Tool allowlist (optional): when provided, only names in this set may execute
         raw_allowed = params.get("tools_allowed")
         allowed_tools: Optional[set[str]] = (
-            set(map(str, raw_allowed)) if isinstance(raw_allowed, (list, tuple, set)) else None
+            set(map(str, raw_allowed))
+            if isinstance(raw_allowed, (list, tuple, set))
+            else None
         )
 
         def _tool_allowed(name: str) -> bool:
             return True if allowed_tools is None else name in allowed_tools
 
+        # Guardrails config
+        guard_enabled = bool(params.get("guardrails_enabled", False))
+        guard_conf_path = params.get("guardrails_config_path")
+        guard_cfg = GuardrailsConfig.load(
+            str(guard_conf_path) if guard_conf_path else None
+        )
+
         # Initial grounded answer using retrieved evidence
+        if guard_enabled:
+            ok, vios = pre_guard(question, config=guard_cfg)
+            if not ok:
+                _emit("guardrails", {"stage": "pre", "violations": vios})
         llm_model_override = params.get("llm_model")
         llm_instructions = params.get("llm_instructions")
         answer_text, llm_meta = self._llm.generate(
@@ -415,6 +433,34 @@ class MainAgent:
             },
         )
         s2, issues, needs_fix = self._verifier.verify(question, answer_text)
+        # Claim-level faithfulness integration (optional)
+        try:
+            faith_enabled = bool(params.get("faithfulness_enabled", True))
+            faith_threshold = float(params.get("faithfulness_threshold", 0.6) or 0.6)
+        except Exception:
+            faith_enabled = True
+            faith_threshold = 0.6
+        if faith_enabled and pack_used:
+            try:
+                f = compute_faithfulness(answer_text, pack_used)
+                fscore = f.get("score")
+                if fscore is not None and fscore < faith_threshold:
+                    if "unsupported claims" not in issues:
+                        issues = list(issues) + ["unsupported claims"]
+                        needs_fix = True
+            except Exception:
+                pass
+        # Post guardrails check on answer
+        if guard_enabled:
+            try:
+                ok_post, vios_post = post_guard(answer_text, config=guard_cfg)
+                if not ok_post:
+                    _emit("guardrails", {"stage": "post", "violations": vios_post})
+                    if "policy_violation" not in issues:
+                        issues = list(issues) + ["policy_violation"]
+                        needs_fix = True
+            except Exception:
+                pass
         if needs_fix and snne_mode == "snne":
             s1 = min(1.0, s1 + 0.1 * len(issues))
         S = final_score(snne_norm=s1, s2=s2, cfg=self._cfg)
@@ -422,6 +468,70 @@ class MainAgent:
         if not cp_ok and getattr(self._cp, "last_reason", None) == "missing_tau":
             issues = list(issues) + ["cp_missing_calibration"]
         action = decide(S, self._cfg, cp_ok)
+
+        # Selective planning (borderline cases by default)
+        planning_enabled = bool(params.get("planning_enabled", False))
+        planning_budget = int(params.get("planning_budget", 0) or 0)
+        planning_mode = str(params.get("planning_mode", "tot") or "tot")
+        planning_when = str(params.get("planning_when", "borderline") or "borderline")
+        borderline = (
+            (self._cfg.tau_accept - self._cfg.delta) <= S < self._cfg.tau_accept
+        )
+        if (
+            planning_enabled
+            and planning_budget > 0
+            and (
+                planning_when == "always"
+                or borderline
+                or (planning_when == "iterate" and action == "iterate")
+            )
+        ):
+            try:
+                plan_out = plan_best_answer(
+                    question=question,
+                    evidence_pack=pack_used,
+                    base_answer=answer_text,
+                    embed=lambda text: embed_text(text),
+                    snne_calibrator=snne_calibrator,
+                    verifier=self._verifier,
+                    policy_cfg=self._cfg,
+                    sample_count=max(2, sample_count // 2),
+                    config=PlanningConfig(mode=planning_mode, budget=planning_budget),
+                )
+            except Exception as _exc:  # pragma: no cover
+                plan_out = {"improved": False, "best": {}, "base": {"S": S}}
+            best = plan_out.get("best") or {}
+            base = plan_out.get("base") or {"S": S}
+            improved = bool(plan_out.get("improved"))
+            _emit(
+                "planning",
+                {
+                    "mode": planning_mode,
+                    "budget": planning_budget,
+                    "candidates": len(plan_out.get("candidates", []) or []),
+                    "base_S": float(base.get("S", S) or S),
+                    "best_S": float(best.get("S", S) or S),
+                    "improved": improved,
+                },
+            )
+            if improved:
+                # Adopt improved candidate
+                answer_text = str(plan_out.get("best_answer", answer_text))
+                s1 = float(best.get("s1", s1) or s1)
+                raw_snne = best.get("raw_snne", raw_snne)
+                snne_samples = best.get("snne_samples", snne_samples)  # type: ignore[assignment]
+                s2 = float(best.get("s2", s2) or s2)
+                issues = list(best.get("issues", issues) or issues)
+                needs_fix = bool(best.get("needs_fix", needs_fix) or needs_fix)
+                S = float(best.get("S", S) or S)
+                cp_ok = self._cp.accept(S)
+                if (
+                    not cp_ok
+                    and getattr(self._cp, "last_reason", None) == "missing_tau"
+                ):
+                    if "cp_missing_calibration" not in issues:
+                        issues = list(issues) + ["cp_missing_calibration"]
+                action = decide(S, self._cfg, cp_ok)
         trace: List[Dict[str, Any]] = [
             {
                 "step_index": 0,

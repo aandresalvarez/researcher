@@ -1,6 +1,8 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from uamm.agents.main_agent import MainAgent
 from uamm.policy.policy import PolicyConfig
+from uamm.verification.faithfulness import compute_faithfulness
+from uamm.config.settings import load_settings
 
 
 def run_evals(
@@ -31,6 +33,7 @@ def run_evals(
     results: List[Dict[str, Any]] = []
     policy = PolicyConfig(tau_accept=accept_threshold, delta=0.0)
     agent = MainAgent(cp_enabled=cp_enabled, policy=policy)
+    settings = load_settings()
     for it in items:
         q = str(it.get("question", ""))
         correct = bool(it.get("correct", False))
@@ -41,7 +44,13 @@ def run_evals(
             "tool_budget_per_refinement": tool_budget_per_refinement,
             "tool_budget_per_turn": tool_budget_per_turn,
         }
-        res = agent.answer(params=params)
+        # Capture planning events for improvement signal
+        events: List[Tuple[str, Dict[str, Any]]] = []
+
+        def _emit(evt: str, data: Dict[str, Any]) -> None:
+            events.append((evt, data))
+
+        res = agent.answer(params=params, emit=_emit)
         S = float(res["uncertainty"]["final_score"])  # type: ignore[index]
         cp_accept = res["uncertainty"].get("cp_accept")
         if use_cp_decision is True:
@@ -52,6 +61,47 @@ def run_evals(
             accepted = bool(cp_accept)
         else:
             accepted = S >= accept_threshold
+        # Tool counts from final trace
+        try:
+            trace = list(res.get("trace", []) or [])
+            tools = int(
+                (trace[-1] or {}).get("tools_used")
+                and len(trace[-1]["tools_used"])
+                or 0
+            )
+        except Exception:
+            tools = 0
+        # Planning improvement flag
+        planning_events = [
+            d for (e, d) in events if e == "planning" and isinstance(d, dict)
+        ]
+        planning_improved = any(bool(d.get("improved")) for d in planning_events)
+        # Tokens/cost estimates
+        usage = res.get("usage", {}) or {}
+        tok_est = None
+        toks = usage.get("llm_tokens")
+        if isinstance(toks, (list, tuple)):
+            tok_est = len(toks)
+        if tok_est is None and usage.get("llm_tokens_estimate") is not None:
+            try:
+                tok_est = int(usage.get("llm_tokens_estimate"))
+            except Exception:
+                tok_est = None
+        cost_est = None
+        try:
+            if tok_est is not None:
+                cpk = float(getattr(settings, "token_cost_per_1k", 0.0) or 0.0)
+                cost_est = (tok_est / 1000.0) * cpk
+        except Exception:
+            cost_est = None
+        # Faithfulness score for the final answer (optional)
+        try:
+            f = compute_faithfulness(
+                res.get("final", ""), res.get("pack_used", []) or []
+            )
+            faith = f.get("score")
+        except Exception:
+            faith = None
         results.append(
             {
                 "question": q,
@@ -60,6 +110,11 @@ def run_evals(
                 "accepted": bool(accepted),
                 "correct": correct,
                 "cp_accept": bool(cp_accept) if cp_accept is not None else None,
+                "tools": tools,
+                "faithfulness": faith,
+                "planning_improved": planning_improved,
+                "tokens_estimate": tok_est,
+                "cost_estimate": cost_est,
             }
         )
     return results

@@ -38,6 +38,11 @@ def test_agent_blocks_disallowed_tool_via_allowlist(monkeypatch):
     result = agent.answer(params=params, emit=emit)
     assert isinstance(result, dict)
     # Look for a blocked tool event for WEB_SEARCH
-    blocked = [d for (evt, d) in events if evt == "tool" and d.get("name") == "WEB_SEARCH" and d.get("status") == "blocked"]
+    blocked = [
+        d
+        for (evt, d) in events
+        if evt == "tool"
+        and d.get("name") == "WEB_SEARCH"
+        and d.get("status") == "blocked"
+    ]
     assert blocked, "Expected WEB_SEARCH to be blocked by tools_allowed"
-

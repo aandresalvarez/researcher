@@ -45,7 +45,13 @@ def cmd_create(args):
 def cmd_issue(args):
     settings = load_settings()
     ensure_schema(settings.db_path, settings.schema_path)
-    token = issue_api_key(settings.db_path, workspace=args.slug, role=args.role, label=args.label, prefix=settings.api_key_prefix)
+    token = issue_api_key(
+        settings.db_path,
+        workspace=args.slug,
+        role=args.role,
+        label=args.label,
+        prefix=settings.api_key_prefix,
+    )
     print({"api_key": token})
 
 
@@ -69,7 +75,9 @@ def main() -> int:
     c = sub.add_parser("create", help="Create a workspace")
     c.add_argument("slug")
     c.add_argument("--name")
-    c.add_argument("--root", help="Filesystem root for this workspace (will be created if missing)")
+    c.add_argument(
+        "--root", help="Filesystem root for this workspace (will be created if missing)"
+    )
     c.set_defaults(func=cmd_create)
 
     k = sub.add_parser("issue", help="Issue API key for a workspace")

@@ -17,12 +17,27 @@ except Exception:  # pragma: no cover - optional dependency
 def main() -> int:
     p = argparse.ArgumentParser(description="Restore workspace bundle from GCS")
     p.add_argument("slug", help="Workspace slug to import into")
-    p.add_argument("gcs_uri", help="gs://bucket/path/to/bundle.zip OR gs://bucket/prefix/ when using --latest")
-    p.add_argument("--base-url", default=os.getenv("UAMM_BASE_URL", "http://127.0.0.1:8000"))
+    p.add_argument(
+        "gcs_uri",
+        help="gs://bucket/path/to/bundle.zip OR gs://bucket/prefix/ when using --latest",
+    )
+    p.add_argument(
+        "--base-url", default=os.getenv("UAMM_BASE_URL", "http://127.0.0.1:8000")
+    )
     p.add_argument("--api-key", default=os.getenv("UAMM_API_KEY"))
-    p.add_argument("--replace", action="store_true", help="Use replace=true to delete before import")
-    p.add_argument("--reindex", action="store_true", help="Trigger vector reindex after import")
-    p.add_argument("--latest", action="store_true", help="Resolve latest object under the given prefix")
+    p.add_argument(
+        "--replace",
+        action="store_true",
+        help="Use replace=true to delete before import",
+    )
+    p.add_argument(
+        "--reindex", action="store_true", help="Trigger vector reindex after import"
+    )
+    p.add_argument(
+        "--latest",
+        action="store_true",
+        help="Resolve latest object under the given prefix",
+    )
     args = p.parse_args()
 
     if storage is None:
@@ -43,7 +58,11 @@ def main() -> int:
         # Expect filenames like workspace_<slug>_...zip(.enc.json)
         target_prefix = prefix + f"workspace_{args.slug}_"
         candidates = list(client_gcs.list_blobs(bucket_name, prefix=target_prefix))
-        candidates = [b for b in candidates if b.name.endswith('.zip') or b.name.endswith('.zip.enc.json')]
+        candidates = [
+            b
+            for b in candidates
+            if b.name.endswith(".zip") or b.name.endswith(".zip.enc.json")
+        ]
         if not candidates:
             print({"error": "no_backups_found", "prefix": target_prefix})
             return 2
@@ -59,9 +78,12 @@ def main() -> int:
             envelope = _json.loads(content.decode("utf-8"))
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
             from google.cloud import kms_v1  # type: ignore
+
             kms_client = kms_v1.KeyManagementServiceClient()
             wrapped = base64.b64decode(envelope["dek_wrapped"])  # type: ignore[index]
-            dek = kms_client.decrypt(name=envelope["kms_key"], ciphertext=wrapped).plaintext  # type: ignore[index]
+            dek = kms_client.decrypt(
+                name=envelope["kms_key"], ciphertext=wrapped
+            ).plaintext  # type: ignore[index]
             aesgcm = AESGCM(dek)
             nonce = base64.b64decode(envelope["nonce"])  # type: ignore[index]
             ct = base64.b64decode(envelope["ciphertext"])  # type: ignore[index]
@@ -85,7 +107,10 @@ def main() -> int:
         r.raise_for_status()
         print(r.json())
         if args.reindex:
-            r2 = client.post(f"{args.base_url}/workspaces/{args.slug}/vector/reindex", headers=headers)
+            r2 = client.post(
+                f"{args.base_url}/workspaces/{args.slug}/vector/reindex",
+                headers=headers,
+            )
             r2.raise_for_status()
             print({"reindex": r2.json()})
     return 0

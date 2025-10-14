@@ -27,6 +27,7 @@ class RetrieverConfig:
     w_dense: float = 0.5
     use_faiss: bool = False
     kg_boost: float = 0.15
+    table_boost: float = 0.1
     lancedb_uri: str | None = None
     lancedb_table: str = "rag_vectors"
     lancedb_metric: str = "cosine"
@@ -225,7 +226,30 @@ def retrieve(
             candidate.get("meta") if isinstance(candidate.get("meta"), dict) else None,
             cfg.kg_boost,
         )
-        total_score = hybrid + kg
+        # Table boost when question hints at tabular reasoning and doc marked as table
+        tbl_boost = 0.0
+        try:
+            meta = (
+                candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+            )
+            is_table = bool(meta.get("table"))
+            if is_table:
+                if any(
+                    term in query.lower()
+                    for term in [
+                        "table",
+                        "sql",
+                        "count",
+                        "cohort",
+                        "row",
+                        "column",
+                        "chart",
+                    ]
+                ):
+                    tbl_boost = float(cfg.table_boost or 0.0)
+        except Exception:
+            tbl_boost = 0.0
+        total_score = hybrid + kg + tbl_boost
         if hybrid < cfg.min_score:
             continue
         candidate["_snippet_vec"] = snippet_vec
@@ -233,6 +257,8 @@ def retrieve(
         candidate["score"] = total_score
         if kg > 0:
             candidate["kg_bonus"] = kg
+        if tbl_boost > 0:
+            candidate["table_bonus"] = tbl_boost
         key = _snippet_key(snippet)
         existing = dedup.get(key)
         if existing is None:
