@@ -67,21 +67,25 @@ def _fixture_lookup(url: str) -> FetchResult | None:
 
 def web_fetch(url: str, policy: EgressPolicy | None = None) -> FetchResult:
     policy = policy or EgressPolicy()
-    check_url_allowed(url, policy)
-    # host allow/deny enforcement
+    # Prefer local fixture to avoid network/DNS during tests or offline runs,
+    # but still enforce basic host allow/deny and TLS policy.
     parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    allow = (
-        [h.lower() for h in policy.allowlist_hosts] if policy.allowlist_hosts else []
-    )
+    host_lc = (parsed.hostname or "").lower()
+    if policy.enforce_tls and parsed.scheme != "https":
+        raise ValueError("TLS required")
+    allow = [h.lower() for h in policy.allowlist_hosts] if policy.allowlist_hosts else []
     deny = [h.lower() for h in policy.denylist_hosts] if policy.denylist_hosts else []
-    if allow and host not in allow:
+    if allow and host_lc not in allow:
         raise ValueError("host not allowed")
-    if deny and host in deny:
+    if deny and host_lc in deny:
         raise ValueError("host not allowed")
     fixture = _fixture_lookup(url)
     if fixture is not None:
         return fixture
+    # Enforce egress policy only when performing real network fetch
+    check_url_allowed(url, policy)
+    # host allow/deny enforcement (already evaluated above, but keep for clarity)
+    # fixture already checked above
     headers = {"User-Agent": "UAMM-Fetch/0.1"}
     timeout = httpx.Timeout(10.0, read=10.0)
     # httpx does not expose redirect limit in Limits; rely on follow_redirects and content checks

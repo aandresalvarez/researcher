@@ -37,6 +37,7 @@ def load_policy(name: str) -> Dict[str, Any]:
         "borderline_delta",
         "tool_budget_per_refinement",
         "tool_budget_per_turn",
+        "tools_allowed",
         "tools_requiring_approval",
         "table_allowed",
         "table_policies",

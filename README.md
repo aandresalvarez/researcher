@@ -91,9 +91,19 @@ Workspaces & Auth
 - Roles: admin (manage), editor (write/search), viewer (search-only).
 - CLI:
   - `make ws-cli` to view usage
-  - Create workspace: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py create my-team`
+  - Create workspace (default rootless/single-DB): `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py create my-team`
+  - Create workspace with filesystem root: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py create my-team --root data/workspaces/my-team`
   - Issue key: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py issue my-team editor editor-key`
   - List keys: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py list-keys my-team`
+  
+Per-folder workspaces (multi-root)
+- Each workspace can have its own root folder containing its DB and docs:
+  - DB: `<root>/uamm.sqlite`
+  - Docs: `<root>/docs`
+  - Vectors (optional LanceDB): `<root>/vectors`
+- Create via API (admin): `POST /workspaces` with `{ "slug": "my-team", "name": "My Team", "root": "data/workspaces/my-team" }`.
+- Server resolves `db_path`, `docs_dir`, and `lancedb_uri` from the workspace root automatically per request.
+  - If no root is set, falls back to global `settings.db_path` and `settings.docs_dir`.
 
 Document ingestion
 - Text: `POST /rag/docs` with `{ "title": "Report", "text": "..." }`.
@@ -101,6 +111,7 @@ Document ingestion
 - Upload: `POST /rag/upload-file` (multipart) with `file` and `filename`. Example:
   `curl -H "Authorization: Bearer $KEY" -F file=@doc.pdf -F filename=doc.pdf http://127.0.0.1:8000/rag/upload-file`
 - Search: `GET /rag/search?q=...`.
+Notes for multi-root: when a workspace has a `root`, all RAG endpoints transparently read/write under `<root>/docs` and store state in `<root>/uamm.sqlite`.
 
 Troubleshooting
 - “ModuleNotFoundError: scripts”: ensure `PYTHONPATH=src:.` (already handled in `make test`).
@@ -172,3 +183,7 @@ Policy packs & overlays
 - Preview diff: `GET /workspaces/{slug}/policies/preview/{name}`
 - Export/import packs: `GET /policies/export`, `POST /policies/import`
 - Overlays used by agent answers and SQL guard: thresholds, budgets, approvals, retriever weights, vectors, table allowlists/policies.
+ - Tool allowlist: add `tools_allowed` to restrict tools per workspace, e.g. `{ "tools_allowed": ["MATH_EVAL", "TABLE_QUERY"] }`.
+   - Disallowed tools are blocked by the agent (emits `tool: blocked`) and by endpoints (e.g., `/table/query` returns 403).
+  - Example pack: see `config/policies/tools_limited.yaml`.
+    - Apply: `curl -X POST -H "Authorization: Bearer $ADMIN_KEY" -H 'content-type: application/json' -d '{"name":"tools_limited"}' http://127.0.0.1:8000/workspaces/my-team/policies/apply`

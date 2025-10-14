@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse
 from uamm.config.settings import load_settings
 from uamm.storage.db import ensure_schema
+from uamm.storage.workspaces import (
+    normalize_root,
+    ensure_allowed_root,
+    ensure_workspace_fs,
+)
 from uamm.security.auth import (
     create_workspace,
     issue_api_key,
@@ -18,10 +23,23 @@ def cmd_create(args):
     ensure_schema(settings.db_path, settings.schema_path)
     con = sqlite3.connect(settings.db_path)
     try:
-        create_workspace(con, args.slug, args.name or args.slug)
+        root = None
+        if args.root:
+            root = normalize_root(args.root)
+            ensure_allowed_root(
+                root,
+                tuple(settings.workspace_base_dirs or []),
+                bool(settings.workspace_restrict_to_bases),
+            )
+            # Initialize per-workspace FS and DB
+            ensure_workspace_fs(root, settings.schema_path)
+        create_workspace(con, args.slug, args.name or args.slug, root)
     finally:
         con.close()
-    print({"created": args.slug})
+    out = {"created": args.slug}
+    if args.root:
+        out["root"] = root
+    print(out)
 
 
 def cmd_issue(args):
@@ -51,6 +69,7 @@ def main() -> int:
     c = sub.add_parser("create", help="Create a workspace")
     c.add_argument("slug")
     c.add_argument("--name")
+    c.add_argument("--root", help="Filesystem root for this workspace (will be created if missing)")
     c.set_defaults(func=cmd_create)
 
     k = sub.add_parser("issue", help="Issue API key for a workspace")
@@ -72,4 +91,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

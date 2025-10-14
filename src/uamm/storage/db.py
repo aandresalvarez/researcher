@@ -85,6 +85,18 @@ def ensure_migrations(db_path: str) -> None:
         if "workspace" not in fcols:
             conn.execute("ALTER TABLE corpus_files ADD COLUMN workspace TEXT")
             conn.commit()
+        # workspaces.root for per-folder workspaces
+        try:
+            cur = conn.execute("PRAGMA table_info(workspaces)")
+            wcols = {row[1] for row in cur.fetchall()}  # type: ignore[index]
+        except Exception:
+            wcols = set()
+        if "root" not in wcols:
+            try:
+                conn.execute("ALTER TABLE workspaces ADD COLUMN root TEXT")
+                conn.commit()
+            except Exception:
+                pass
     finally:
         conn.close()
 

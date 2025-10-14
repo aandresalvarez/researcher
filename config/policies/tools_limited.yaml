@@ -1,0 +1,7 @@
+tools_allowed:
+  - MATH_EVAL
+  - TABLE_QUERY
+tool_budget_per_turn: 2
+tool_budget_per_refinement: 1
+rag_weight_sparse: 0.6
+rag_weight_dense: 0.4

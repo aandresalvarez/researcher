@@ -355,6 +355,15 @@ class MainAgent:
                 lancedb_metric=params.get("lancedb_metric"),
                 lancedb_k=lancedb_k,
             )
+        # Tool allowlist (optional): when provided, only names in this set may execute
+        raw_allowed = params.get("tools_allowed")
+        allowed_tools: Optional[set[str]] = (
+            set(map(str, raw_allowed)) if isinstance(raw_allowed, (list, tuple, set)) else None
+        )
+
+        def _tool_allowed(name: str) -> bool:
+            return True if allowed_tools is None else name in allowed_tools
+
         # Initial grounded answer using retrieved evidence
         llm_model_override = params.get("llm_model")
         llm_instructions = params.get("llm_instructions")
@@ -547,7 +556,16 @@ class MainAgent:
             # WEB_SEARCH as lightweight exploratory tool when budgets allow
             if tool_budget_ref > 0 and tool_budget_turn > 0:
                 tool_name = "WEB_SEARCH"
-                if tool_name in requires_approval and tool_name not in approved_tools:
+                if not _tool_allowed(tool_name):
+                    _emit(
+                        "tool",
+                        {
+                            "name": tool_name,
+                            "status": "blocked",
+                            "meta": {"reason": "not_allowed"},
+                        },
+                    )
+                elif tool_name in requires_approval and tool_name not in approved_tools:
                     appr_id = _request_approval(
                         tool_name, {"question_preview": question[:120]}
                     )
@@ -562,7 +580,7 @@ class MainAgent:
                             },
                         )
                         approval_pending = True
-                else:
+                elif _tool_allowed(tool_name):
                     _emit(
                         "tool",
                         {
@@ -620,7 +638,16 @@ class MainAgent:
                     min(iteration - 1, len(candidate_urls) - 1)
                 ]
                 tool_name = "WEB_FETCH"
-                if tool_name in requires_approval and tool_name not in approved_tools:
+                if not _tool_allowed(tool_name):
+                    _emit(
+                        "tool",
+                        {
+                            "name": tool_name,
+                            "status": "blocked",
+                            "meta": {"reason": "not_allowed", "url": url_candidate},
+                        },
+                    )
+                elif tool_name in requires_approval and tool_name not in approved_tools:
                     appr_id = _request_approval(tool_name, {"url": url_candidate})
                     if appr_id:
                         _emit(
@@ -633,7 +660,7 @@ class MainAgent:
                             },
                         )
                         approval_pending = True
-                else:
+                elif _tool_allowed(tool_name):
                     _emit(
                         "tool",
                         {
@@ -748,7 +775,16 @@ class MainAgent:
                     str(number_candidate) if number_candidate is not None else "1+1"
                 )
                 tool_name = "MATH_EVAL"
-                if tool_name in requires_approval and tool_name not in approved_tools:
+                if not _tool_allowed(tool_name):
+                    _emit(
+                        "tool",
+                        {
+                            "name": tool_name,
+                            "status": "blocked",
+                            "meta": {"reason": "not_allowed", "expr": math_expr},
+                        },
+                    )
+                elif tool_name in requires_approval and tool_name not in approved_tools:
                     appr_id = _request_approval(tool_name, {"expr": math_expr})
                     if appr_id:
                         _emit(
@@ -761,7 +797,7 @@ class MainAgent:
                             },
                         )
                         approval_pending = True
-                else:
+                elif _tool_allowed(tool_name):
                     _emit(
                         "tool",
                         {
@@ -846,7 +882,16 @@ class MainAgent:
                 if sql_candidate:
                     table_sql = sql_candidate
                     tool_name = "TABLE_QUERY"
-                    if (
+                    if not _tool_allowed(tool_name):
+                        _emit(
+                            "tool",
+                            {
+                                "name": tool_name,
+                                "status": "blocked",
+                                "meta": {"reason": "not_allowed", "sql": table_sql},
+                            },
+                        )
+                    elif (
                         tool_name in requires_approval
                         and tool_name not in approved_tools
                     ):
@@ -862,7 +907,7 @@ class MainAgent:
                                 },
                             )
                             approval_pending = True
-                    else:
+                    elif _tool_allowed(tool_name):
                         _emit(
                             "tool",
                             {

@@ -37,13 +37,22 @@ def new_key(prefix: str = "wk_", length: int = 24) -> str:
     return token
 
 
-def create_workspace(conn: sqlite3.Connection, slug: str, name: Optional[str] = None) -> str:
+def create_workspace(
+    conn: sqlite3.Connection, slug: str, name: Optional[str] = None, root: Optional[str] = None
+) -> str:
     ws_id = str(uuid.uuid4())
     ts = time.time()
-    conn.execute(
-        "INSERT OR IGNORE INTO workspaces (id, slug, name, created) VALUES (?, ?, ?, ?)",
-        (ws_id, slug, name or slug, ts),
-    )
+    # Try to insert with root column; fall back if column is absent
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO workspaces (id, slug, name, created, root) VALUES (?, ?, ?, ?, ?)",
+            (ws_id, slug, name or slug, ts, root),
+        )
+    except Exception:
+        conn.execute(
+            "INSERT OR IGNORE INTO workspaces (id, slug, name, created) VALUES (?, ?, ?, ?)",
+            (ws_id, slug, name or slug, ts),
+        )
     conn.commit()
     return ws_id
 
@@ -127,8 +136,22 @@ def deactivate_key(db_path: str, *, key_id: str) -> None:
 def list_workspaces(db_path: str) -> list[dict]:
     conn = _connect(db_path)
     try:
-        rows = conn.execute("SELECT id, slug, name, created FROM workspaces").fetchall()
-        return [dict(id=r["id"], slug=r["slug"], name=r["name"], created=float(r["created"])) for r in rows]
+        try:
+            rows = conn.execute("SELECT id, slug, name, created, root FROM workspaces").fetchall()
+        except Exception:
+            rows = conn.execute("SELECT id, slug, name, created FROM workspaces").fetchall()
+        out: list[dict] = []
+        for r in rows:
+            item = dict(
+                id=r["id"],
+                slug=r["slug"],
+                name=r["name"],
+                created=float(r["created"]) if r["created"] is not None else None,
+            )
+            if "root" in r.keys():  # type: ignore[attr-defined]
+                item["root"] = r["root"]
+            out.append(item)
+        return out
     finally:
         conn.close()
 
@@ -136,10 +159,27 @@ def list_workspaces(db_path: str) -> list[dict]:
 def get_workspace(db_path: str, slug: str) -> Optional[dict]:
     conn = _connect(db_path)
     try:
-        r = conn.execute("SELECT id, slug, name, created FROM workspaces WHERE slug=?", (slug,)).fetchone()
+        try:
+            r = conn.execute(
+                "SELECT id, slug, name, created, root FROM workspaces WHERE slug=?",
+                (slug,),
+            ).fetchone()
+        except Exception:
+            r = conn.execute(
+                "SELECT id, slug, name, created FROM workspaces WHERE slug=?",
+                (slug,),
+            ).fetchone()
         if not r:
             return None
-        return dict(id=r["id"], slug=r["slug"], name=r["name"], created=float(r["created"]))
+        out = dict(
+            id=r["id"],
+            slug=r["slug"],
+            name=r["name"],
+            created=float(r["created"]) if r["created"] is not None else None,
+        )
+        if "root" in r.keys():  # type: ignore[attr-defined]
+            out["root"] = r["root"]
+        return out
     finally:
         conn.close()
 
@@ -168,7 +208,7 @@ def count_keys(db_path: str, *, workspace: str | None = None) -> int:
 def insert_api_key(db_path: str, *, workspace: str, role: str, label: str, token: str) -> None:
     conn = _connect(db_path)
     try:
-        create_workspace(conn, workspace, name=workspace)
+        create_workspace(conn, workspace, name=workspace, root=None)
         kh = hash_key(token)
         ts = time.time()
         kid = str(uuid.uuid4())
