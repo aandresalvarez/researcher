@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-import json
 
 from uamm.api.main import create_app
 from uamm.storage.db import ensure_schema
