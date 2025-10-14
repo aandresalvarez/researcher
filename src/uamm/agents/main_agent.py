@@ -497,6 +497,7 @@ class MainAgent:
                     policy_cfg=self._cfg,
                     sample_count=max(2, sample_count // 2),
                     config=PlanningConfig(mode=planning_mode, budget=planning_budget),
+                    domain=domain,
                 )
             except Exception as _exc:  # pragma: no cover
                 plan_out = {"improved": False, "best": {}, "base": {"S": S}}
