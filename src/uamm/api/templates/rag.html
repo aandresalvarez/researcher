@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumb-wrap" aria-label="breadcrumb">
+  <ol class="breadcrumb mb-2">
+    <li class="breadcrumb-item"><a href="/ui/home">Home</a></li>
+    <li class="breadcrumb-item active" aria-current="page">RAG</li>
+  </ol>
+</nav>
+<div class="row">
+  <div class="col-lg-6">
+    <div class="card mb-3">
+      <div class="card-header">Upload File</div>
+      <div class="card-body">
+        <form id="upload-form" onsubmit="uploadFile(event)" enctype="multipart/form-data">
+          <div class="mb-2">
+            <input type="file" id="file" name="file" class="form-control" required />
+          </div>
+          <div class="mb-2">
+            <input type="text" id="filename" name="filename" class="form-control" placeholder="Optional filename override" />
+          </div>
+          <div class="mb-2">
+            <input type="text" id="ws" name="ws" class="form-control" placeholder="Workspace header (optional)" />
+          </div>
+          <div class="mb-2">
+            <input type="password" id="key1" name="key" class="form-control" placeholder="API Key (optional)" />
+          </div>
+          <button class="btn btn-primary" type="submit">Upload</button>
+        </form>
+        <div id="upload-result" class="small mt-2 text-muted"></div>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-header">Ingest Folder</div>
+      <div class="card-body">
+        <form id="ingest-form" onsubmit="ingestFolder(event)">
+          <div class="mb-2">
+            <input type="text" id="path" name="path" class="form-control" placeholder="Path under docs_dir (optional)" />
+            <div class="form-text">Defaults to configured docs_dir (workspace-aware).</div>
+          </div>
+          <div class="mb-2">
+            <input type="text" id="ws2" name="ws" class="form-control" placeholder="Workspace header (optional)" />
+          </div>
+          <div class="mb-2">
+            <input type="password" id="key2" name="key" class="form-control" placeholder="API Key (optional)" />
+          </div>
+          <button class="btn btn-secondary" type="submit">Ingest</button>
+        </form>
+        <div id="ingest-result" class="small mt-2 text-muted"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card mb-3">
+      <div class="card-header">Search Corpus</div>
+      <div class="card-body">
+        <form id="search-form" onsubmit="searchCorpus(event)">
+          <div class="row g-2">
+            <div class="col-9"><input type="text" id="q" name="q" class="form-control" placeholder="Query" required /></div>
+            <div class="col-3"><button class="btn btn-outline-primary w-100" type="submit">Search</button></div>
+          </div>
+        </form>
+        <div id="search-results" class="mt-3"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function uploadFile(ev) {
+  ev.preventDefault();
+  const form = document.getElementById('upload-form');
+  const fd = new FormData(form);
+  const key = document.getElementById('key1').value.trim();
+  const ws = document.getElementById('ws').value.trim();
+  try {
+    const res = await ctxFetch('/rag/upload-file', {
+      method: 'POST',
+      body: fd
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'upload failed');
+    document.getElementById('upload-result').textContent = `OK — saved, scanned: ${JSON.stringify(data)}`;
+  } catch (e) {
+    document.getElementById('upload-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function ingestFolder(ev) {
+  ev.preventDefault();
+  const path = document.getElementById('path').value.trim();
+  const ws = document.getElementById('ws2').value.trim();
+  const key = document.getElementById('key2').value.trim();
+  try {
+    const res = await ctxFetch('/rag/ingest-folder', {
+      method: 'POST',
+      headers: Object.assign({'content-type':'application/json'}),
+      body: JSON.stringify(path ? {path} : {})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'ingest failed');
+    document.getElementById('ingest-result').textContent = `OK — ${data.count || 0} files processed`;
+  } catch (e) {
+    document.getElementById('ingest-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function searchCorpus(ev) {
+  ev.preventDefault();
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const resEl = document.getElementById('search-results');
+  resEl.innerHTML = '<div class="text-muted small">Searching…</div>';
+  try {
+    const res = await ctxFetch('/rag/search?' + new URLSearchParams({q}));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'search failed');
+    const hits = data.hits || [];
+    if (!hits.length) { resEl.innerHTML = '<div class="text-muted">No results</div>'; return; }
+    const html = hits.map(h => {
+      const snippet = (h.snippet || '').toString();
+      const score = (h.score !== undefined) ? `score ${h.score.toFixed ? h.score.toFixed(3) : h.score}` : '';
+      const url = h.url ? `<div class="small text-truncate"><a href="${h.url}" target="_blank">${h.url}</a></div>` : '';
+      return `<div class="border rounded p-2 mb-2"><div class="small text-muted">${score}</div><div>${escapeHtml(snippet)}</div>${url}</div>`;
+    }).join('');
+    resEl.innerHTML = html;
+  } catch (e) {
+    resEl.innerHTML = '<div class="text-danger small">Error: ' + e.message + '</div>';
+  }
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+}
+</script>
+{% endblock %}
