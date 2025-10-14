@@ -12,12 +12,12 @@ from uamm.api.state import (
     CPThresholdCache,
     TunerProposalStore,
 )
-from uamm.storage.ttl import ttl_cleaner
 from uamm.policy import cp_store
 from uamm.security.secrets import SecretManager, SecretError
 from uamm.rag.ingest import scan_folder
 from uamm.security.auth import lookup_key, parse_bearer
 from uamm.security.auth import count_keys, insert_api_key, new_key
+from uamm.storage.workspaces import resolve_paths as ws_resolve_paths
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -66,6 +66,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 request.state.role = rec.role
                 request.state.user = f"key:{rec.label}" if rec.label else "key:unknown"
         # If auth_required, enforce presence of valid key on protected writes at route level
+        return await call_next(request)
+
+
+class WorkspacePathMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Resolve per-workspace paths (db/docs/vectors) based on workspace record
+        try:
+            settings = request.app.state.settings
+            slug = getattr(request.state, "workspace", None) or request.headers.get("X-Workspace", "default")
+            paths = ws_resolve_paths(settings.db_path, slug, settings)
+            # Attach to request.state for downstream usage
+            request.state.db_path = paths.get("db_path", settings.db_path)
+            request.state.docs_dir = paths.get("docs_dir", settings.docs_dir)
+            request.state.lancedb_uri = paths.get("lancedb_uri", settings.lancedb_uri)
+        except Exception:
+            # Best-effort; fall back to settings
+            settings = request.app.state.settings
+            request.state.db_path = getattr(settings, "db_path", "data/uamm.sqlite")
+            request.state.docs_dir = getattr(settings, "docs_dir", "data/docs")
+            request.state.lancedb_uri = getattr(settings, "lancedb_uri", "data/lancedb")
         return await call_next(request)
 
 
@@ -135,6 +155,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(AuthMiddleware)
     app.add_middleware(WorkspaceMiddleware)
+    app.add_middleware(WorkspacePathMiddleware)
     app.add_middleware(RateLimitMiddleware)
 
     @app.on_event("startup")
@@ -198,13 +219,54 @@ def create_app() -> FastAPI:
         # launch TTL cleaner
         import asyncio
 
-        app.state.ttl_task = asyncio.create_task(
-            ttl_cleaner(
-                settings.db_path,
-                steps_ttl_days=settings.steps_ttl_days,
-                memory_ttl_days=settings.memory_ttl_days,
-            )
-        )
+        async def _multi_ttl_cleaner():
+            import sqlite3 as _sqlite3
+            steps_ttl_days = int(getattr(settings, "steps_ttl_days", 90))
+            memory_ttl_days = int(getattr(settings, "memory_ttl_days", 60))
+            interval = int(getattr(settings, "docs_scan_interval_seconds", 60)) or 60
+            from datetime import timedelta
+            steps_ttl = timedelta(days=steps_ttl_days).total_seconds()
+            mem_ttl = timedelta(days=memory_ttl_days).total_seconds()
+            while True:
+                try:
+                    import time as _t
+                    now = _t.time()
+                    # Clean index DB (harmless if tables are empty)
+                    try:
+                        con = _sqlite3.connect(settings.db_path)
+                        with con:
+                            con.execute("DELETE FROM steps WHERE ts < ?", (now - steps_ttl,))
+                            con.execute("DELETE FROM memory WHERE ts < ?", (now - mem_ttl,))
+                        con.close()
+                    except Exception:
+                        pass
+                    # Clean each workspace DB
+                    try:
+                        con = _sqlite3.connect(settings.db_path)
+                        con.row_factory = _sqlite3.Row
+                        rows = con.execute("SELECT slug FROM workspaces").fetchall()
+                        con.close()
+                        for r in rows:
+                            slug = r["slug"]
+                            paths = ws_resolve_paths(settings.db_path, slug, settings)
+                            dbp = paths.get("db_path")
+                            if not dbp:
+                                continue
+                            try:
+                                c2 = _sqlite3.connect(dbp)
+                                with c2:
+                                    c2.execute("DELETE FROM steps WHERE ts < ?", (now - steps_ttl,))
+                                    c2.execute("DELETE FROM memory WHERE ts < ?", (now - mem_ttl,))
+                                c2.close()
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                await asyncio.sleep(max(30, interval))
+
+        app.state.ttl_task = asyncio.create_task(_multi_ttl_cleaner())
 
         # Optional background docs folder scanner
         if getattr(settings, "docs_auto_ingest", True):
@@ -212,7 +274,31 @@ def create_app() -> FastAPI:
                 try:
                     while True:
                         try:
-                            scan_folder(settings.db_path, settings.docs_dir, settings=settings)
+                            # If workspaces exist with roots, scan each workspace docs dir; otherwise scan global docs_dir
+                            import sqlite3 as _sqlite3
+                            from pathlib import Path as _Path
+                            try:
+                                con = _sqlite3.connect(settings.db_path)
+                                con.row_factory = _sqlite3.Row
+                                rows = con.execute("SELECT slug FROM workspaces").fetchall()
+                                con.close()
+                            except Exception:
+                                rows = []
+                            if rows:
+                                for r in rows:
+                                    slug = r["slug"]
+                                    paths = ws_resolve_paths(settings.db_path, slug, settings)
+                                    docs_dir = paths.get("docs_dir")
+                                    dbp = paths.get("db_path")
+                                    if not docs_dir or not dbp:
+                                        continue
+                                    try:
+                                        if _Path(docs_dir).exists():
+                                            scan_folder(dbp, docs_dir, settings=settings)
+                                    except Exception:
+                                        continue
+                            else:
+                                scan_folder(settings.db_path, settings.docs_dir, settings=settings)
                         except Exception as exc:  # pragma: no cover - best effort
                             logging.getLogger("uamm.rag.ingest").warning(
                                 "docs_scan_failed", extra={"error": str(exc)}

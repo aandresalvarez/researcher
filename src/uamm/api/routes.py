@@ -69,6 +69,11 @@ from uamm.security.auth import (
     create_workspace as ws_create,
     deactivate_key as ws_deactivate,
 )
+from uamm.storage.workspaces import (
+    ensure_allowed_root,
+    normalize_root,
+    ensure_workspace_fs,
+)
 from uamm.config.policy_packs import list_policies, load_policy
 
 
@@ -499,6 +504,9 @@ def answer(
                     setattr(settings, "tool_budget_per_turn", int(pack["tool_budget_per_turn"]))
                 if "tools_requiring_approval" in pack:
                     setattr(settings, "tools_requiring_approval", list(pack["tools_requiring_approval"]))
+                if "tools_allowed" in pack:
+                    # Attach to request.state for downstream use
+                    setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
                 if "rag_weight_sparse" in pack:
                     setattr(settings, "rag_weight_sparse", float(pack["rag_weight_sparse"]))
                 if "rag_weight_dense" in pack:
@@ -568,11 +576,16 @@ def answer(
     params.setdefault("snne_samples", req.snne_samples)
     params.setdefault("snne_tau", getattr(settings, "snne_tau", 0.3))
     params.setdefault("cp_target_mis", req.cp_target_mis)
-    params.setdefault("db_path", settings.db_path)
+    # Use per-request resolved DB path when available
+    eff_db_path = getattr(request.state, "db_path", None) or settings.db_path
+    params.setdefault("db_path", eff_db_path)
     params.setdefault("rag_weight_sparse", getattr(settings, "rag_weight_sparse", 0.5))
     params.setdefault("rag_weight_dense", getattr(settings, "rag_weight_dense", 0.5))
     params.setdefault("vector_backend", getattr(settings, "vector_backend", "none"))
-    params.setdefault("lancedb_uri", getattr(settings, "lancedb_uri", ""))
+    params.setdefault(
+        "lancedb_uri",
+        getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")),
+    )
     params.setdefault(
         "lancedb_table", getattr(settings, "lancedb_table", "rag_vectors")
     )
@@ -602,6 +615,10 @@ def answer(
     params["tools_requiring_approval"] = params.get(
         "tools_requiring_approval"
     ) or getattr(settings, "tools_requiring_approval", [])
+    # Tool allowlist config (optional)
+    allowed_tools = getattr(request.state, "tools_allowed", None)
+    if allowed_tools is not None:
+        params["tools_allowed"] = list(allowed_tools)
     params.setdefault("approvals", getattr(request.app.state, "approvals", None))
     approval_token = request.headers.get("X-Approval-ID")
     approvals_store = getattr(request.app.state, "approvals", None)
@@ -882,7 +899,9 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             params.setdefault("snne_samples", req.snne_samples)
             params.setdefault("snne_tau", getattr(settings, "snne_tau", 0.3))
             params.setdefault("cp_target_mis", req.cp_target_mis)
-            params.setdefault("db_path", settings.db_path)
+            # Use per-request resolved DB path when available
+            eff_db_path = getattr(request.state, "db_path", None) or settings.db_path
+            params.setdefault("db_path", eff_db_path)
             params.setdefault(
                 "rag_weight_sparse", getattr(settings, "rag_weight_sparse", 0.5)
             )
@@ -892,7 +911,10 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             params.setdefault(
                 "vector_backend", getattr(settings, "vector_backend", "none")
             )
-            params.setdefault("lancedb_uri", getattr(settings, "lancedb_uri", ""))
+            params.setdefault(
+                "lancedb_uri",
+                getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")),
+            )
             params.setdefault(
                 "lancedb_table", getattr(settings, "lancedb_table", "rag_vectors")
             )
@@ -924,6 +946,10 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             params["tools_requiring_approval"] = params.get(
                 "tools_requiring_approval"
             ) or getattr(settings, "tools_requiring_approval", [])
+            # Tool allowlist config (optional)
+            allowed_tools = getattr(request.state, "tools_allowed", None)
+            if allowed_tools is not None:
+                params["tools_allowed"] = list(allowed_tools)
             params.setdefault(
                 "approvals", getattr(request.app.state, "approvals", None)
             )
@@ -1183,8 +1209,9 @@ def memory_add(req: MemoryAddRequest, request: Request):
     settings = request.app.state.settings
     _require_role(request, {"admin", "editor"})
     red_text, _ = redact(req.text)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
     mid = db_add_memory(
-        settings.db_path,
+        eff_db,
         key=req.key,
         text=red_text,
         domain=req.domain,
@@ -1214,12 +1241,13 @@ def rag_add(req: RagDocRequest, request: Request):
     if not chunks:
         chunks = [red_text]
     ids: list[str] = []
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
     for idx, segment in enumerate(chunks):
         meta = {"title": req.title or "", "chunk_index": idx, "chunk_total": len(chunks)}
         if req.url:
             meta["url"] = req.url
         did = rag_add_doc(
-            settings.db_path,
+            eff_db,
             title=req.title,
             url=req.url,
             text=segment,
@@ -1230,7 +1258,16 @@ def rag_add(req: RagDocRequest, request: Request):
         ids.append(did)
         if getattr(settings, "vector_backend", "none").lower() == "lancedb":
             try:
-                upsert_document_embedding(settings, did, segment, meta=meta)
+                # Override lancedb_uri per workspace without mutating global settings
+                from types import SimpleNamespace
+                ws_uri = getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", ""))
+                s_ovr = SimpleNamespace(
+                    vector_backend=getattr(settings, "vector_backend", "none"),
+                    lancedb_uri=ws_uri,
+                    lancedb_table=getattr(settings, "lancedb_table", "rag_vectors"),
+                    lancedb_metric=getattr(settings, "lancedb_metric", "cosine"),
+                )
+                upsert_document_embedding(s_ovr, did, segment, meta=meta)
             except LanceDBUnavailable:
                 logging.getLogger("uamm.rag.vector").warning(
                     "lancedb_dependency_missing",
@@ -1257,16 +1294,17 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
     """
     settings = request.app.state.settings
     _require_role(request, {"admin", "editor"})
-    base = req.path or getattr(settings, "docs_dir", "data/docs")
+    base = req.path or getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))
     # Restrict to configured base directory for safety
-    configured = Path(getattr(settings, "docs_dir", "data/docs")).resolve()
+    configured = Path(getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
     target = Path(base).resolve()
     if configured not in target.parents and configured != target:
         return JSONResponse(
             status_code=400,
             content={"error": "path must be within configured docs_dir"},
         )
-    stats = scan_folder(settings.db_path, str(target), settings=settings)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    stats = scan_folder(eff_db, str(target), settings=settings)
     return {"ok": True, "path": str(target), **stats}
 
 
@@ -1279,7 +1317,7 @@ async def rag_upload_file(request: Request, file: UploadFile = File(...), filena
     _require_role(request, {"admin", "editor"})
     settings = request.app.state.settings
     ws = _resolve_workspace(request)
-    docs_root = Path(getattr(settings, "docs_dir", "data/docs")).resolve()
+    docs_root = Path(getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
     target_dir = docs_root / ws
     target_dir.mkdir(parents=True, exist_ok=True)
     fn = filename or (file.filename or "upload.bin")
@@ -1288,7 +1326,8 @@ async def rag_upload_file(request: Request, file: UploadFile = File(...), filena
     if len(data or b"") > 2 * 1024 * 1024:
         return JSONResponse(status_code=400, content={"error": "file_too_large"})
     dest.write_bytes(data or b"")
-    stats = scan_folder(settings.db_path, str(target_dir), settings=settings)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    stats = scan_folder(eff_db, str(target_dir), settings=settings)
     return {"ok": True, "workspace": ws, **stats}
 
 
@@ -1298,7 +1337,7 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
     _require_role(request, {"admin", "editor"})
     settings = request.app.state.settings
     ws = _resolve_workspace(request)
-    docs_root = Path(getattr(settings, "docs_dir", "data/docs")).resolve()
+    docs_root = Path(getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
     target_dir = docs_root / ws
     target_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
@@ -1311,7 +1350,8 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
             continue
         (target_dir / Path(fn).name).write_bytes(data or b"")
         saved += 1
-    stats = scan_folder(settings.db_path, str(target_dir), settings=settings)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    stats = scan_folder(eff_db, str(target_dir), settings=settings)
     return {"ok": True, "workspace": ws, "saved": saved, "skipped": skipped, **stats}
 
 
@@ -1328,7 +1368,8 @@ def rag_search(request: Request, q: str, k: int = 5):
             raise
     _check_rate_limit(request)
     ws = _resolve_workspace(request)
-    hits = rag_search_docs(settings.db_path, q, k=k, workspace=ws)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    hits = rag_search_docs(eff_db, q, k=k, workspace=ws)
     return {"hits": hits}
 
 
@@ -1343,7 +1384,8 @@ def memory_search(request: Request, q: str, k: int = 5):
             raise
     _check_rate_limit(request)
     ws = _resolve_workspace(request)
-    hits = db_search_memory(settings.db_path, q, k=k, workspace=ws)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    hits = db_search_memory(eff_db, q, k=k, workspace=ws)
     return {"hits": hits}
 
 
@@ -1363,7 +1405,8 @@ def memory_pack(req: MemoryPackRequest, request: Request):
             raise
     _check_rate_limit(request)
     ws = _resolve_workspace(request)
-    hits = db_search_memory(settings.db_path, req.question, k=req.memory_budget, workspace=ws)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    hits = db_search_memory(eff_db, req.question, k=req.memory_budget, workspace=ws)
     pack = [MemoryPackItem(**h) for h in hits]
     return {"pack": [p.model_dump() for p in pack]}
 
@@ -1390,8 +1433,9 @@ def pack_merge(req: PackMergeRequest, request: Request):
             raise
     _check_rate_limit(request)
     ws = _resolve_workspace(request)
-    m_hits = db_search_memory(settings.db_path, req.question, k=req.memory_k, workspace=ws)
-    c_hits = rag_search_docs(settings.db_path, req.question, k=req.corpus_k, workspace=ws)
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    m_hits = db_search_memory(eff_db, req.question, k=req.memory_k, workspace=ws)
+    c_hits = rag_search_docs(eff_db, req.question, k=req.corpus_k, workspace=ws)
     # Normalize corpus hits to MemoryPackItem shape
     c_norm = [
         {
@@ -1420,6 +1464,7 @@ def pack_merge(req: PackMergeRequest, request: Request):
 class WorkspaceCreateRequest(BaseModel):
     slug: str
     name: str | None = None
+    root: str | None = None
 
 
 @router.post("/workspaces")
@@ -1428,7 +1473,18 @@ def workspace_create(req: WorkspaceCreateRequest, request: Request):
     settings = request.app.state.settings
     con = sqlite3.connect(settings.db_path)
     try:
-        ws_create(con, req.slug, req.name or req.slug)
+        root = None
+        if req.root:
+            # Normalize and validate against allowed bases
+            root = normalize_root(req.root)
+            ensure_allowed_root(
+                root,
+                tuple(getattr(settings, "workspace_base_dirs", []) or []),
+                bool(getattr(settings, "workspace_restrict_to_bases", False)),
+            )
+            # Initialize FS and workspace DB
+            ensure_workspace_fs(root, settings.schema_path)
+        ws_create(con, req.slug, req.name or req.slug, root)
     finally:
         con.close()
     ws = ws_get(settings.db_path, req.slug)
@@ -2752,8 +2808,21 @@ def table_query(req: TableQueryRequest, request: Request):
                     settings.table_policies = dict(pack["table_policies"])  # type: ignore[attr-defined]
                 if "table_allowed_by_domain" in pack:
                     settings.table_allowed_by_domain = dict(pack["table_allowed_by_domain"])  # type: ignore[attr-defined]
+                if "tools_allowed" in pack:
+                    setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
     except Exception:
         pass
+    # Tool allowlist enforcement: require TABLE_QUERY when allowlist present
+    allowed_tools = getattr(request.state, "tools_allowed", None)
+    if allowed_tools is not None and "TABLE_QUERY" not in set(allowed_tools):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "code": "tool_forbidden",
+                "message": "TABLE_QUERY not allowed for this workspace",
+                "request_id": getattr(request.state, "request_id", ""),
+            },
+        )
     sql = req.sql
     if not is_read_only_select(sql):
         return JSONResponse(
@@ -2816,8 +2885,9 @@ def table_query(req: TableQueryRequest, request: Request):
         rl[t].append(now)
     request.app.state.table_rates = rl
 
+    eff_db = getattr(request.state, "db_path", None) or settings.db_path
     rows = db_table_query(
-        settings.db_path,
+        eff_db,
         sql,
         req.params,
         max_rows=max_rows_eff,
@@ -2826,7 +2896,7 @@ def table_query(req: TableQueryRequest, request: Request):
     # map to dicts using cursor description
     import sqlite3
 
-    con = sqlite3.connect(settings.db_path)
+    con = sqlite3.connect(eff_db)
     cur = con.execute(sql, req.params or [])
     col_names = [d[0] for d in cur.description]
     con.close()

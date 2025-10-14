@@ -118,6 +118,15 @@ class Settings:
     auth_required: bool = bool(int(os.getenv("UAMM_AUTH_REQUIRED", "0")))
     api_key_header: str = os.getenv("UAMM_API_KEY_HEADER", "X-API-Key")
     api_key_prefix: str = os.getenv("UAMM_API_KEY_PREFIX", "wk_")
+    # Workspaces (multi-root)
+    workspace_mode: str = os.getenv("UAMM_WORKSPACE_MODE", "single")
+    # Comma-separated list of allowed base dirs; empty means no restriction (dev)
+    workspace_base_dirs_raw: str = os.getenv("UAMM_WORKSPACE_BASE_DIRS", "")
+    workspace_restrict_to_bases: bool = bool(
+        int(os.getenv("UAMM_WORKSPACE_RESTRICT_TO_BASES", "0"))
+    )
+    # Derived list for convenience (populated in load_settings)
+    workspace_base_dirs: list[str] = None  # type: ignore[assignment]
 
 
 def load_settings() -> Settings:
@@ -149,4 +158,14 @@ def load_settings() -> Settings:
     if not s.vector_backend:
         s.vector_backend = "none"
     s.vector_backend = str(s.vector_backend).lower()
+    # Derive workspace base dirs list
+    if s.workspace_base_dirs is None:
+        raw = (s.workspace_base_dirs_raw or "").strip()
+        s.workspace_base_dirs = [p for p in (x.strip() for x in raw.split(",")) if p]
+    # Default restriction: enable in non-dev if not explicitly set
+    try:
+        if str(s.env).lower() not in {"dev", "test"} and os.getenv("UAMM_WORKSPACE_RESTRICT_TO_BASES") is None:
+            s.workspace_restrict_to_bases = True
+    except Exception:
+        pass
     return s

@@ -131,7 +131,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
   slug TEXT UNIQUE,
   name TEXT,
-  created REAL
+  created REAL,
+  root TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workspace_keys (
