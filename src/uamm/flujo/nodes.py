@@ -30,6 +30,8 @@ from uamm.tools.web_fetch import web_fetch
 from uamm.tools.web_search import web_search
 from uamm.tools.math_eval import math_eval
 from uamm.tools.table_query import table_query
+from uamm.rag.embeddings import embed_text
+from uamm.planning.strategies import plan_best_answer, PlanningConfig
 
 
 InputT = TypeVar("InputT", bound=BaseModel)
@@ -262,6 +264,50 @@ class ToolNode(FlujoNode[ToolInput, ToolOutput]):
             raise ValueError(f"Unknown tool '{payload.name}'")
         result = tool(**payload.args)
         return ToolOutput(result=result)
+
+
+class PlanningInput(BaseModel):
+    question: str
+    evidence_pack: List[Dict[str, Any]]
+    base_answer: str
+    planning_mode: str = "tot"
+    planning_budget: int = 3
+    sample_count: int = 3
+
+
+class PlanningCandidate(BaseModel):
+    answer: str
+    s1: float
+    s2: float
+    S: float
+    issues: List[str] = []
+
+
+class PlanningOutput(BaseModel):
+    best_answer: str
+    best: Dict[str, Any]
+    base: Dict[str, Any]
+    candidates: List[Dict[str, Any]]
+    improved: bool
+
+
+class PlanningNode(FlujoNode[PlanningInput, PlanningOutput]):
+    input_model = PlanningInput
+    output_model = PlanningOutput
+
+    def execute(self, payload: PlanningInput, **kwargs: Any) -> PlanningOutput:
+        out = plan_best_answer(
+            question=payload.question,
+            evidence_pack=payload.evidence_pack,
+            base_answer=payload.base_answer,
+            embed=lambda t: embed_text(t),
+            snne_calibrator=None,
+            verifier=Verifier(),
+            policy_cfg=PolicyConfig(),
+            sample_count=payload.sample_count,
+            config=PlanningConfig(mode=payload.planning_mode, budget=payload.planning_budget),
+        )
+        return PlanningOutput(**out)
 
 
 class PCNInput(BaseModel):

@@ -54,5 +54,7 @@ def load_policy(name: str) -> Dict[str, Any]:
         "lancedb_table",
         "lancedb_metric",
         "lancedb_k",
+        # Optional governance assertions payload consumers can pass to /gov/check
+        "gov_assertions",
     }
     return {k: v for k, v in data.items() if k in allowed}

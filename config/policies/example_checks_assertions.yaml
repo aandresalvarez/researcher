@@ -1,0 +1,47 @@
+"""
+Example policy pack combining SQL checks and GoV assertions.
+
+Apply to a workspace:
+  curl -X POST \
+    -H "Authorization: Bearer $ADMIN_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"name":"example_checks_assertions"}' \
+    http://127.0.0.1:8000/workspaces/my-team/policies/apply
+
+Use GoV assertions by fetching this pack and passing `gov_assertions` to `/gov/check`.
+"""
+
+tools_allowed:
+  - WEB_SEARCH
+  - WEB_FETCH
+  - MATH_EVAL
+  - TABLE_QUERY
+
+table_allowed:
+  - demo
+
+table_policies:
+  demo:
+    max_rows: 200
+    max_time_ms: 500
+    checks:
+      id:
+        non_negative: true
+        min: 1
+      value:
+        monotonic: nondecreasing
+        max: 100000
+
+# Governance assertions that can be submitted to /gov/check
+gov_assertions:
+  - predicate: no_cycles
+  - predicate: no_pcn_failures
+  - predicate: no_dependency_failures
+  - predicate: max_depth
+    value: 6
+  - predicate: types_allowed
+    types: [premise, claim, evidence, observation, calculation]
+  - predicate: path_exists
+    source: a
+    target: b
+

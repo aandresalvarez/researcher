@@ -53,14 +53,17 @@ from uamm.storage.memory import (
 )
 from uamm.models.schemas import MemoryPackItem
 from uamm.obs.logger import log_step
+from uamm.verification.faithfulness import compute_faithfulness
 from uamm.obs.dashboard import build_dashboard_summary
 from uamm.security.sql_guard import is_read_only_select, tables_allowed
 from uamm.tools.table_query import table_query as db_table_query
+from uamm.pcn.sql_checks import evaluate_checks
 from uamm.tuner import TunerAgent, TunerTargets
 from uamm.rag.vector_store import LanceDBUnavailable, upsert_document_embedding
 from uamm.rag.ingest import scan_folder, make_chunks
 from uamm.gov.executor import evaluate_dag
 from uamm.gov.validator import validate_dag
+from uamm.policy.assertions import load_assertions as _load_assertions, evaluate_assertions as _eval_assertions
 from uamm.security.auth import (
     issue_api_key as ws_issue_key,
     list_keys as ws_list_keys,
@@ -176,12 +179,14 @@ def _bucket_event_lists(
     list[Dict[str, Any]],
     list[Dict[str, Any]],
     list[Dict[str, Any]],
+    list[Dict[str, Any]],
 ]:
     pcn_map: Dict[str, Dict[str, Any]] = dict(existing_pcn or {})
     tool_events: list[Dict[str, Any]] = []
     score_events: list[Dict[str, Any]] = []
     uq_events: list[Dict[str, Any]] = []
     gov_events: list[Dict[str, Any]] = []
+    planning_events: list[Dict[str, Any]] = []
     for evt, data in events:
         if evt == "pcn":
             pid = str(data.get("id", ""))
@@ -216,7 +221,9 @@ def _bucket_event_lists(
             uq_events.append(data)
         elif evt == "gov":
             gov_events.append(data)
-    return pcn_map, tool_events, score_events, uq_events, gov_events
+        elif evt == "planning":
+            planning_events.append(data)
+    return pcn_map, tool_events, score_events, uq_events, gov_events, planning_events
 
 
 def _prepare_trace_blob(
@@ -224,7 +231,7 @@ def _prepare_trace_blob(
     events: list[tuple[str, Dict[str, Any]]],
     existing_pcn: Dict[str, Dict[str, Any]] | None = None,
 ) -> tuple[str, Dict[str, Dict[str, Any]], list[Dict[str, Any]], list[Dict[str, Any]]]:
-    pcn_map, tool_events, score_events, uq_events, gov_events = _bucket_event_lists(
+    pcn_map, tool_events, score_events, uq_events, gov_events, planning_events = _bucket_event_lists(
         events, existing_pcn
     )
     full_trace = [t.model_dump(mode="json") for t in final.trace]
@@ -238,6 +245,8 @@ def _prepare_trace_blob(
                 "uq": uq_events,
                 "pcn": pcn_map,
                 "gov": gov_events,
+                # include planning events for observability
+                "planning": planning_events,
             },
             "pack_used": pack_used,
         }
@@ -275,6 +284,85 @@ def _persist_trace_and_metrics(
     a_red, _ = redact(final.final)
     metrics_state = request.app.state.metrics
     _update_uq_metrics(metrics_state, uq_events, req.domain)
+    # Guardrails metrics from events inside trace blob
+    try:
+        blob = json.loads(trace_blob)
+        events_map = blob.get("events", {}) if isinstance(blob, dict) else {}
+        gr_events = events_map.get("guardrails", []) or []
+    except Exception:
+        gr_events = []
+    if gr_events:
+        guard = metrics_state.setdefault("guardrails", {"pre": 0, "post": 0, "by_domain": {}})
+        by_dom = guard.setdefault("by_domain", {})
+        dom = req.domain
+        dom_counters = by_dom.setdefault(dom, {"pre": 0, "post": 0})
+        for evt in gr_events:
+            stage = str(evt.get("stage", "")).lower()
+            if stage == "pre":
+                guard["pre"] = int(guard.get("pre", 0)) + 1
+                dom_counters["pre"] = int(dom_counters.get("pre", 0)) + 1
+            elif stage == "post":
+                guard["post"] = int(guard.get("post", 0)) + 1
+                dom_counters["post"] = int(dom_counters.get("post", 0)) + 1
+    # Planning metrics (from trace blob events)
+    try:
+        blob = json.loads(trace_blob)
+        events_map = blob.get("events", {}) if isinstance(blob, dict) else {}
+        p_events = events_map.get("planning", []) or []
+        runs = len(p_events)
+        improvements = sum(1 for e in p_events if isinstance(e, dict) and e.get("improved"))
+        if runs:
+            pstats = metrics_state.setdefault("planning", {"runs": 0, "improvements": 0})
+            pstats["runs"] = int(pstats.get("runs", 0)) + runs
+            pstats["improvements"] = int(pstats.get("improvements", 0)) + int(improvements)
+        # Units checks from PCN map
+        pcn_map = events_map.get("pcn", {}) or {}
+        unit_runs = unit_fail = 0
+        if isinstance(pcn_map, dict):
+            for entry in pcn_map.values():
+                if not isinstance(entry, dict):
+                    continue
+                pol = entry.get("policy") if isinstance(entry.get("policy"), dict) else None
+                if pol and pol.get("units"):
+                    unit_runs += 1
+                    if str(entry.get("status", "")).lower() == "failed":
+                        unit_fail += 1
+        if unit_runs:
+            units = metrics_state.setdefault("units_checks", {"runs": 0, "fail": 0})
+            units["runs"] = int(units.get("runs", 0)) + unit_runs
+            units["fail"] = int(units.get("fail", 0)) + unit_fail
+    except Exception:
+        pass
+    # Claim-level faithfulness (graceful on errors)
+    try:
+        faith = compute_faithfulness(final.final, final.pack_used)
+    except Exception:
+        faith = {"score": None, "claim_count": 0, "supported_count": 0, "unsupported_claims": []}
+    if isinstance(faith, dict):
+        f_global = metrics_state.setdefault(
+            "faithfulness",
+            {"count": 0, "sum": 0.0, "claim_count": 0, "unsupported_total": 0},
+        )
+        f_dom_map = metrics_state.setdefault("faithfulness_by_domain", {})
+        f_dom = f_dom_map.setdefault(
+            req.domain,
+            {"count": 0, "sum": 0.0, "claim_count": 0, "unsupported_total": 0},
+        )
+        score = faith.get("score")
+        claim_count = int(faith.get("claim_count", 0) or 0)
+        unsupported = faith.get("unsupported_claims") or []
+        if score is not None:
+            f_global["count"] = int(f_global.get("count", 0)) + 1
+            f_global["sum"] = float(f_global.get("sum", 0.0)) + float(score)
+            f_dom["count"] = int(f_dom.get("count", 0)) + 1
+            f_dom["sum"] = float(f_dom.get("sum", 0.0)) + float(score)
+        if claim_count:
+            f_global["claim_count"] = int(f_global.get("claim_count", 0)) + claim_count
+            f_dom["claim_count"] = int(f_dom.get("claim_count", 0)) + claim_count
+        if unsupported:
+            n_uns = len(unsupported)
+            f_global["unsupported_total"] = int(f_global.get("unsupported_total", 0)) + n_uns
+            f_dom["unsupported_total"] = int(f_dom.get("unsupported_total", 0)) + n_uns
     if gov_events:
         metrics_state.setdefault("gov_events", []).extend(gov_events)
         failure_count = sum(
@@ -611,6 +699,11 @@ def answer(
     params.setdefault(
         "egress_denylist_hosts", getattr(settings, "egress_denylist_hosts", [])
     )
+    # Planning defaults
+    params.setdefault("planning_enabled", getattr(settings, "planning_enabled", False))
+    params.setdefault("planning_mode", getattr(settings, "planning_mode", "tot"))
+    params.setdefault("planning_budget", getattr(settings, "planning_budget", 3))
+    params.setdefault("planning_when", getattr(settings, "planning_when", "borderline"))
     # Tool approvals config
     params["tools_requiring_approval"] = params.get(
         "tools_requiring_approval"
@@ -898,6 +991,33 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             params.setdefault("max_refinements", req.max_refinements)
             params.setdefault("snne_samples", req.snne_samples)
             params.setdefault("snne_tau", getattr(settings, "snne_tau", 0.3))
+            # Planning defaults
+            params.setdefault(
+                "planning_enabled", getattr(settings, "planning_enabled", False)
+            )
+            params.setdefault(
+                "planning_mode", getattr(settings, "planning_mode", "tot")
+            )
+            params.setdefault(
+                "planning_budget", getattr(settings, "planning_budget", 3)
+            )
+            params.setdefault(
+                "planning_when", getattr(settings, "planning_when", "borderline")
+            )
+            # Faithfulness defaults
+            params.setdefault(
+                "faithfulness_enabled", getattr(settings, "faithfulness_enabled", True)
+            )
+            params.setdefault(
+                "faithfulness_threshold", getattr(settings, "faithfulness_threshold", 0.6)
+            )
+            # Faithfulness defaults
+            params.setdefault(
+                "faithfulness_enabled", getattr(settings, "faithfulness_enabled", True)
+            )
+            params.setdefault(
+                "faithfulness_threshold", getattr(settings, "faithfulness_threshold", 0.6)
+            )
             params.setdefault("cp_target_mis", req.cp_target_mis)
             # Use per-request resolved DB path when available
             eff_db_path = getattr(request.state, "db_path", None) or settings.db_path
@@ -1209,7 +1329,8 @@ def memory_add(req: MemoryAddRequest, request: Request):
     settings = request.app.state.settings
     _require_role(request, {"admin", "editor"})
     red_text, _ = redact(req.text)
-    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    # Environment override for tests/dev takes precedence
+    eff_db = os.getenv("UAMM_DB_PATH") or getattr(request.state, "db_path", None) or settings.db_path
     mid = db_add_memory(
         eff_db,
         key=req.key,
@@ -2097,6 +2218,32 @@ def metrics(request: Request):
             m_out["uq_by_domain"] = {
                 dom: _format_uq(stats) for dom, stats in uq_by_dom.items()
             }
+        # Faithfulness summary (global and by_domain)
+        faith = m.get("faithfulness", {}) or {}
+        fbd = m.get("faithfulness_by_domain", {}) or {}
+        try:
+            f_count = int(faith.get("count", 0) or 0)
+            f_sum = float(faith.get("sum", 0.0) or 0.0)
+            f_claims = int(faith.get("claim_count", 0) or 0)
+            f_unsupported = int(faith.get("unsupported_total", 0) or 0)
+            f_avg = (f_sum / f_count) if f_count > 0 else None
+            m_out["faithfulness_summary"] = {
+                "avg_score": f_avg,
+                "claims": f_claims,
+                "unsupported": f_unsupported,
+            }
+            if fbd:
+                summary: Dict[str, Any] = {}
+                for dom, stats in fbd.items():
+                    c = int((stats or {}).get("count", 0) or 0)
+                    s = float((stats or {}).get("sum", 0.0) or 0.0)
+                    cc = int((stats or {}).get("claim_count", 0) or 0)
+                    uu = int((stats or {}).get("unsupported_total", 0) or 0)
+                    avg = (s / c) if c > 0 else None
+                    summary[dom] = {"avg_score": avg, "claims": cc, "unsupported": uu}
+                m_out["faithfulness_by_domain_summary"] = summary
+        except Exception:
+            pass
         cp_stats = cp_store.domain_stats(settings.db_path)
         m_out["cp_stats"] = cp_stats
         request.app.state.metrics["cp_stats"] = cp_stats
@@ -2246,6 +2393,16 @@ def metrics(request: Request):
         if alerts:
             m_out["alerts"] = alerts
             request.app.state.metrics["alerts"] = alerts
+        # MCP metrics snapshot (best-effort)
+        try:
+            from uamm.mcp.server import mcp_metrics_snapshot  # type: ignore
+
+            mcp_stats = mcp_metrics_snapshot()
+            if mcp_stats:
+                m_out["mcp"] = mcp_stats
+                request.app.state.metrics["mcp"] = mcp_stats
+        except Exception:
+            pass
         return m_out
     except Exception:
         return m
@@ -2280,6 +2437,91 @@ def metrics_prom(request: Request):
     lines.append("# HELP uamm_answers_total Total answers produced")
     lines.append("# TYPE uamm_answers_total counter")
     lines.append(f"uamm_answers_total {m.get('answers', 0)}")
+    # GoV assertions
+    govm = m.get("gov_assertions", {}) or {}
+    lines.append("# HELP uamm_assertions_total GoV assertions runs")
+    lines.append("# TYPE uamm_assertions_total counter")
+    lines.append(f"uamm_assertions_total {int(govm.get('runs', 0) or 0)}")
+    lines.append("# HELP uamm_assertions_fail_total GoV assertions failures")
+    lines.append("# TYPE uamm_assertions_fail_total counter")
+    lines.append(f"uamm_assertions_fail_total {int(govm.get('fail', 0) or 0)}")
+    by_pred = govm.get("by_pred", {}) or {}
+    if by_pred:
+        lines.append("# HELP uamm_assertions_by_pred_total GoV assertions runs by predicate")
+        lines.append("# TYPE uamm_assertions_by_pred_total counter")
+        for pred, st in by_pred.items():
+            lines.append(f'uamm_assertions_by_pred_total{{predicate="{pred}"}} {int((st or {}).get("runs", 0) or 0)}')
+        lines.append("# HELP uamm_assertions_fail_by_pred_total GoV assertions failures by predicate")
+        lines.append("# TYPE uamm_assertions_fail_by_pred_total counter")
+        for pred, st in by_pred.items():
+            lines.append(f'uamm_assertions_fail_by_pred_total{{predicate="{pred}"}} {int((st or {}).get("fail", 0) or 0)}')
+    # Units checks
+    units = m.get("units_checks", {}) or {}
+    lines.append("# HELP uamm_units_checks_total Units checks runs")
+    lines.append("# TYPE uamm_units_checks_total counter")
+    lines.append(f"uamm_units_checks_total {int(units.get('runs', 0) or 0)}")
+    lines.append("# HELP uamm_units_checks_fail_total Units checks failures")
+    lines.append("# TYPE uamm_units_checks_fail_total counter")
+    lines.append(f"uamm_units_checks_fail_total {int(units.get('fail', 0) or 0)}")
+    # SQL checks
+    sqlm = m.get("sql_checks", {}) or {}
+    lines.append("# HELP uamm_sql_checks_total SQL checks runs")
+    lines.append("# TYPE uamm_sql_checks_total counter")
+    lines.append(f"uamm_sql_checks_total {int(sqlm.get('runs', 0) or 0)}")
+    lines.append("# HELP uamm_sql_checks_fail_total SQL checks failures")
+    lines.append("# TYPE uamm_sql_checks_fail_total counter")
+    lines.append(f"uamm_sql_checks_fail_total {int(sqlm.get('fail', 0) or 0)}")
+    # Memory promotions
+    memory = m.get("memory", {}) or {}
+    lines.append("# HELP uamm_memory_promotions_total Semantic memory promotions")
+    lines.append("# TYPE uamm_memory_promotions_total counter")
+    lines.append(f"uamm_memory_promotions_total {int(memory.get('promotions', 0) or 0)}")
+    # MCP metrics
+    mcp = m.get("mcp", {}) or {}
+    lines.append("# HELP uamm_mcp_requests_total MCP adapter requests")
+    lines.append("# TYPE uamm_mcp_requests_total counter")
+    lines.append(f"uamm_mcp_requests_total {int(mcp.get('requests', 0) or 0)}")
+    lines.append("# HELP uamm_mcp_errors_total MCP adapter errors")
+    lines.append("# TYPE uamm_mcp_errors_total counter")
+    lines.append(f"uamm_mcp_errors_total {int(mcp.get('errors', 0) or 0)}")
+    by_tool = mcp.get("by_tool", {}) or {}
+    if by_tool:
+        lines.append("# HELP uamm_mcp_requests_by_tool_total MCP adapter requests by tool")
+        lines.append("# TYPE uamm_mcp_requests_by_tool_total counter")
+        for tool, cnt in by_tool.items():
+            lines.append(f'uamm_mcp_requests_by_tool_total{{tool="{tool}"}} {int(cnt or 0)}')
+    # Guardrails counters
+    guard = m.get("guardrails", {}) or {}
+    lines.append("# HELP uamm_guardrails_violations_pre_total Pre-guard violations")
+    lines.append("# TYPE uamm_guardrails_violations_pre_total counter")
+    lines.append(f"uamm_guardrails_violations_pre_total {int(guard.get('pre', 0) or 0)}")
+    lines.append("# HELP uamm_guardrails_violations_post_total Post-guard violations")
+    lines.append("# TYPE uamm_guardrails_violations_post_total counter")
+    lines.append(f"uamm_guardrails_violations_post_total {int(guard.get('post', 0) or 0)}")
+    # Planning counters
+    planning = m.get("planning", {}) or {}
+    lines.append("# HELP uamm_planning_runs_total Planning invocations observed")
+    lines.append("# TYPE uamm_planning_runs_total counter")
+    lines.append(f"uamm_planning_runs_total {int(planning.get('runs', 0) or 0)}")
+    lines.append("# HELP uamm_planning_improvements_total Planning rounds with improvement")
+    lines.append("# TYPE uamm_planning_improvements_total counter")
+    lines.append(f"uamm_planning_improvements_total {int(planning.get('improvements', 0) or 0)}")
+    # Faithfulness (global)
+    faith = m.get("faithfulness", {}) or {}
+    f_count = int(faith.get("count", 0) or 0)
+    f_sum = float(faith.get("sum", 0.0) or 0.0)
+    f_claims = int(faith.get("claim_count", 0) or 0)
+    f_unsupported = int(faith.get("unsupported_total", 0) or 0)
+    lines.append("# HELP uamm_faithfulness_score Average claim faithfulness score (0..1)")
+    lines.append("# TYPE uamm_faithfulness_score gauge")
+    avg_f = (f_sum / f_count) if f_count > 0 else float("nan")
+    lines.append(f"uamm_faithfulness_score {_prom_number(avg_f)}")
+    lines.append("# HELP uamm_claims_total Total extracted claims")
+    lines.append("# TYPE uamm_claims_total counter")
+    lines.append(f"uamm_claims_total {f_claims}")
+    lines.append("# HELP uamm_claims_unsupported_total Total unsupported claims")
+    lines.append("# TYPE uamm_claims_unsupported_total counter")
+    lines.append(f"uamm_claims_unsupported_total {f_unsupported}")
     lines.append("# HELP uamm_abstain_total Total abstentions")
     lines.append("# TYPE uamm_abstain_total counter")
     lines.append(f"uamm_abstain_total {m.get('abstain', 0)}")
@@ -2296,6 +2538,48 @@ def metrics_prom(request: Request):
         lines.append(
             f'uamm_abstain_by_domain_total{{domain="{dom}"}} {dm.get("abstain", 0)}'
         )
+    # Guardrails by domain
+    guard = m.get("guardrails", {}) or {}
+    gb = guard.get("by_domain", {}) or {}
+    if gb:
+        lines.append("# HELP uamm_guardrails_violations_pre_by_domain_total Pre-guard violations by domain")
+        lines.append("# TYPE uamm_guardrails_violations_pre_by_domain_total counter")
+        for dom, stats in gb.items():
+            lines.append(
+                f'uamm_guardrails_violations_pre_by_domain_total{{domain="{dom}"}} {int((stats or {}).get("pre", 0) or 0)}'
+            )
+        lines.append("# HELP uamm_guardrails_violations_post_by_domain_total Post-guard violations by domain")
+        lines.append("# TYPE uamm_guardrails_violations_post_by_domain_total counter")
+        for dom, stats in gb.items():
+            lines.append(
+                f'uamm_guardrails_violations_post_by_domain_total{{domain="{dom}"}} {int((stats or {}).get("post", 0) or 0)}'
+            )
+    # Faithfulness by domain
+    fbd = m.get("faithfulness_by_domain", {}) or {}
+    if fbd:
+        lines.append("# HELP uamm_faithfulness_score_by_domain Average claim faithfulness score by domain")
+        lines.append("# TYPE uamm_faithfulness_score_by_domain gauge")
+        for dom, stats in fbd.items():
+            c = int((stats or {}).get("count", 0) or 0)
+            s = float((stats or {}).get("sum", 0.0) or 0.0)
+            avg = (s / c) if c > 0 else float("nan")
+            lines.append(
+                f'uamm_faithfulness_score_by_domain{{domain="{dom}"}} {_prom_number(avg)}'
+            )
+        lines.append("# HELP uamm_claims_by_domain_total Total extracted claims by domain")
+        lines.append("# TYPE uamm_claims_by_domain_total counter")
+        for dom, stats in fbd.items():
+            cc = int((stats or {}).get("claim_count", 0) or 0)
+            lines.append(f'uamm_claims_by_domain_total{{domain="{dom}"}} {cc}')
+        lines.append(
+            "# HELP uamm_claims_unsupported_by_domain_total Total unsupported claims by domain"
+        )
+        lines.append("# TYPE uamm_claims_unsupported_by_domain_total counter")
+        for dom, stats in fbd.items():
+            uu = int((stats or {}).get("unsupported_total", 0) or 0)
+            lines.append(
+                f'uamm_claims_unsupported_by_domain_total{{domain="{dom}"}} {uu}'
+            )
     # Histogram for answer latency (seconds)
     lines.append("# HELP uamm_answer_latency_seconds Answer latency in seconds")
     lines.append("# TYPE uamm_answer_latency_seconds histogram")
@@ -2416,6 +2700,22 @@ def metrics_prom(request: Request):
             dom_rate = (dm.get("abstain", 0) or 0) / dom_answers if dom_answers else 0.0
             lines.append(
                 f'uamm_abstain_rate_by_domain{{domain="{dom}"}} {_prom_number(dom_rate)}'
+            )
+    # SQL checks by domain
+    sqlm = m.get("sql_checks", {}) or {}
+    sqlbd = sqlm.get("by_domain", {}) or {}
+    if sqlbd:
+        lines.append("# HELP uamm_sql_checks_by_domain_total SQL checks runs by domain")
+        lines.append("# TYPE uamm_sql_checks_by_domain_total counter")
+        for dom, st in sqlbd.items():
+            lines.append(
+                f'uamm_sql_checks_by_domain_total{{domain="{dom}"}} {int((st or {}).get("runs", 0) or 0)}'
+            )
+        lines.append("# HELP uamm_sql_checks_fail_by_domain_total SQL checks failures by domain")
+        lines.append("# TYPE uamm_sql_checks_fail_by_domain_total counter")
+        for dom, st in sqlbd.items():
+            lines.append(
+                f'uamm_sql_checks_fail_by_domain_total{{domain="{dom}"}} {int((st or {}).get("fail", 0) or 0)}'
             )
     # Approvals metrics
     approvals_store = getattr(request.app.state, "approvals", None)
@@ -2631,10 +2931,11 @@ def cp_stats(request: Request, domain: str | None = None):
 class GoVCheckRequest(BaseModel):
     dag: Dict[str, Any]
     verified_pcn: list[str] = Field(default_factory=list)
+    assertions: list[Dict[str, Any]] = Field(default_factory=list)
 
 
 @router.post("/gov/check")
-def gov_check(req: GoVCheckRequest):
+def gov_check(req: GoVCheckRequest, request: Request):
     """Validate and evaluate a compact GoV DAG.
 
     Body example:
@@ -2652,7 +2953,34 @@ def gov_check(req: GoVCheckRequest):
         return "verified" if token_id in verified else None
 
     ok, failures = evaluate_dag(req.dag, pcn_status=_pcn_status)
-    return {"ok": ok, "failures": failures, "validation_ok": True}
+    assertions_in = _load_assertions(req.assertions)
+    assertions_out, gov_metrics = _eval_assertions(
+        dag=req.dag,
+        verified_pcn=req.verified_pcn,
+        assertions=assertions_in,
+        dag_ok=ok,
+        dag_failures=failures,
+        validate_dag_fn=validate_dag,
+    )
+
+    # Update global metrics for assertions
+    try:
+        metrics = request.app.state.metrics
+        govm = metrics.setdefault("gov_assertions", {"runs": 0, "fail": 0, "by_pred": {}})
+        total_fails = sum(1 for a in assertions_out if not a.get("passed"))
+        govm["runs"] = int(govm.get("runs", 0)) + 1
+        if total_fails:
+            govm["fail"] = int(govm.get("fail", 0)) + 1
+        by = govm.setdefault("by_pred", {})
+        for a in assertions_out:
+            key = str(a.get("predicate", ""))
+            pred_m = by.setdefault(key, {"runs": 0, "fail": 0})
+            pred_m["runs"] = int(pred_m.get("runs", 0)) + 1
+            if not a.get("passed"):
+                pred_m["fail"] = int(pred_m.get("fail", 0)) + 1
+    except Exception:
+        pass
+    return {"ok": ok, "failures": failures, "validation_ok": True, "assertions": assertions_out}
 
 
 @router.get("/steps/recent")
@@ -2787,6 +3115,13 @@ class TableQueryRequest(BaseModel):
 @router.post("/table/query")
 def table_query(req: TableQueryRequest, request: Request):
     settings = request.app.state.settings
+    # Force env override for DB path when present (tests/dev)
+    try:
+        env_db = os.getenv("UAMM_DB_PATH")
+        if env_db:
+            setattr(settings, "db_path", env_db)
+    except Exception:
+        pass
     import sqlite3 as _sqlite3  # ensure name for overlay
     # Apply workspace policy overlay for table guard resolution
     try:
@@ -2907,7 +3242,33 @@ def table_query(req: TableQueryRequest, request: Request):
         }
         for row in rows
     ]
-    return {"rows": out}
+    # SQL property checks from table_policies checks merged across referenced tables
+    checks_combined: Dict[str, Dict[str, Any]] = {}
+    try:
+        for t in tables:
+            tp = pol.get(t, {})
+            ch = tp.get("checks") if isinstance(tp, dict) else None
+            if isinstance(ch, dict):
+                for col, spec in ch.items():
+                    if isinstance(spec, dict):
+                        checks_combined[col] = dict(spec)
+        violations = evaluate_checks(out, checks_combined) if checks_combined else []
+    except Exception:
+        violations = []
+    # Update metrics for checks
+    if checks_combined:
+        m = request.app.state.metrics
+        sqlm = m.setdefault("sql_checks", {"runs": 0, "fail": 0, "by_domain": {}})
+        sqlm["runs"] = int(sqlm.get("runs", 0)) + 1
+        if violations:
+            sqlm["fail"] = int(sqlm.get("fail", 0)) + 1
+        dom_map = sqlm.setdefault("by_domain", {})
+        dom = req.domain or getattr(request.state, "workspace", "default") or "default"
+        dom_entry = dom_map.setdefault(dom, {"runs": 0, "fail": 0})
+        dom_entry["runs"] = int(dom_entry.get("runs", 0)) + 1
+        if violations:
+            dom_entry["fail"] = int(dom_entry.get("fail", 0)) + 1
+    return {"rows": out, "checks": {"applied": checks_combined, "violations": violations, "ok": not bool(violations)}}
 
 
 # Duplicate CP endpoints removed; see canonical definitions earlier in file
@@ -3128,6 +3489,10 @@ def policies_preview(slug: str, name: str, request: Request):
     """Preview differences between current applied policy and a named pack."""
     _require_role(request, {"admin"})
     settings = request.app.state.settings
+    # Env override for DB path in tests/dev
+    env_db = os.getenv("UAMM_DB_PATH")
+    if env_db:
+        setattr(settings, "db_path", env_db)
     import ast
     new_pack = load_policy(name)
     if not new_pack:
@@ -3163,6 +3528,9 @@ class ApplyPolicyRequest(BaseModel):
 def policies_apply(slug: str, req: ApplyPolicyRequest, request: Request):
     _require_role(request, {"admin"})
     settings = request.app.state.settings
+    env_db = os.getenv("UAMM_DB_PATH")
+    if env_db:
+        setattr(settings, "db_path", env_db)
     pack = load_policy(req.name)
     if not pack:
         return JSONResponse(status_code=404, content={"error": "unknown_policy"})
@@ -3183,6 +3551,9 @@ def policies_apply(slug: str, req: ApplyPolicyRequest, request: Request):
 def policies_current(slug: str, request: Request):
     _require_role(request, {"admin"})
     settings = request.app.state.settings
+    env_db = os.getenv("UAMM_DB_PATH")
+    if env_db:
+        setattr(settings, "db_path", env_db)
     con = sqlite3.connect(settings.db_path)
     con.row_factory = sqlite3.Row
     try:

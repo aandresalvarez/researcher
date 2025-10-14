@@ -22,6 +22,11 @@ Quick start
   - Run server: `make run`
   - Open docs: http://127.0.0.1:8000/docs
 
+Runtime lifecycle
+- The API uses FastAPI lifespan handlers for startup/shutdown (no deprecated `on_event`).
+  - Startup initializes config/secrets, schema/migrations, in‑memory stores, background tasks (TTL cleaner, docs watcher).
+  - Shutdown gracefully cancels background tasks.
+
 Ask your first question
 - Non‑streaming: `curl -s -X POST http://127.0.0.1:8000/agent/answer -H 'content-type: application/json' -d '{"question":"What is modular memory?"}' | jq`
 - Streaming (SSE):
@@ -70,6 +75,37 @@ UQ, CP, PCN, GoV, Memory
 - Persistent memory: A small SQLite “modular memory” stores facts, traces, summaries.
   - TTL cleanup runs in the background (config: `memory_ttl_days`, `steps_ttl_days`).
   - Optional vector search (FAISS/LanceDB) can enrich retrieval; disabled by default.
+
+Planning (selective compute)
+- Enable via env or request params: `UAMM_PLANNING_ENABLED=1` (modes: `tot|beam|mcts`, `UAMM_PLANNING_MODE`).
+- Runs a budgeted search when answers are borderline (or `planning_when=always`); emits `planning` SSE events.
+- Prometheus exports planning counters.
+
+Faithfulness (claim-level)
+- Extracts sentence-level claims and aligns to retrieved evidence.
+- Low faithfulness adds `unsupported claims` to issues for refinement.
+- Metrics: `/metrics` faithfulness summaries; Prometheus averages and counts.
+
+Guardrails (heuristic)
+- Optional pre/post checks for risky patterns.
+- Enable: `UAMM_GUARDRAILS_ENABLED=1`; optional `UAMM_GUARDRAILS_CONFIG_PATH` (YAML).
+- SSE `guardrails` events; Prometheus counters (pre/post, by domain).
+
+SQL Checks & Assertions
+- `/table/query` applies per-table checks from policy packs (e.g., min/max/non_negative/monotonic per column) and returns `checks` with `violations`.
+- `/gov/check` accepts `assertions` (e.g., `no_cycles`, `no_pcn_failures`, `max_depth`, `path_exists`, `types_allowed`) and returns pass/fail.
+
+Units for PCN
+- Attach `policy: { units: "ms|kg|%|..." }` to PCN tokens. With `pint` installed (`uv pip install -e .[units]`), values are validated and Prometheus exports units-check counters.
+
+Memory Promotion & Tables
+- Enable promotions: `UAMM_MEMORY_PROMOTION_ENABLED=1`, `UAMM_MEMORY_PROMOTION_MIN_SUPPORT=3`.
+- PDF table extraction (install `uv pip install -e .[tables]`) with `UAMM_DOCS_TABLES_ENABLED=1`; retrieval boosts table docs for tabular queries.
+
+MCP (Pydantic AI)
+- Exposes tools and `UAMM_ANSWER` via Pydantic AI MCP when runtime is installed.
+- CLI: `PYTHONPATH=src .venv/bin/python scripts/mcp_server.py --host 127.0.0.1 --port 8765`.
+- Metrics: `/metrics` includes `mcp` stats; Prometheus exports totals and per-tool counters.
 
 Safety defaults
 - Web fetch is protected (TLS required, private IPs blocked, optional allow/deny lists).
@@ -144,11 +180,18 @@ More endpoints
 - Approvals API: `POST /tools/approve` → `{ approval_id, approved, reason }`
 - Tuner (optional): propose/apply safer settings via `/tuner/propose` and `/tuner/apply`
 - CP: `GET /cp/threshold?domain=...` and `GET /cp/stats`
-- GoV: `POST /gov/check` with `{ "dag": { nodes, edges }, "verified_pcn": ["id1", ...] }` → `{ ok, failures }`
+- GoV: `POST /gov/check` with `{ "dag": { nodes, edges }, "verified_pcn": ["id1", ...], "assertions": [...] }` → `{ ok, failures, assertions }`
 
 Notes
 - Python version for dev is 3.14 (see `.python-version`).
-- Optional vector extras (FAISS/LanceDB) can be enabled later with `make install-vector`.
+- Optional extras
+  - Vectors: `make install-vector`
+  - Ingest (PDF/DOCX): `make install-ingest`
+  - OCR: `make install-ocr`
+  - Chunking: `make install-chunk`
+  - Tables (pdfplumber): `uv pip install -e .[tables]`
+  - Units (pint): `uv pip install -e .[units]`
+  - Formal (pint + z3): `uv pip install -e .[formal]`
 
 FAQ
 - Which UQ method? SNNE with quantile‑based calibration and logistic fallback.
@@ -187,3 +230,6 @@ Policy packs & overlays
    - Disallowed tools are blocked by the agent (emits `tool: blocked`) and by endpoints (e.g., `/table/query` returns 403).
   - Example pack: see `config/policies/tools_limited.yaml`.
     - Apply: `curl -X POST -H "Authorization: Bearer $ADMIN_KEY" -H 'content-type: application/json' -d '{"name":"tools_limited"}' http://127.0.0.1:8000/workspaces/my-team/policies/apply`
+ - SQL checks & GoV assertions pack: see `config/policies/example_checks_assertions.yaml`.
+   - SQL checks are applied automatically by `/table/query` when tables match; the endpoint returns `checks` with `violations`.
+   - To run GoV assertions, fetch the pack and pass its `gov_assertions` under the `assertions` field to `/gov/check`.

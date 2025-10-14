@@ -10,6 +10,7 @@ from uamm.rag.vector_store import (
     LanceDBUnavailable,
     upsert_document_embedding,
 )
+from uamm.rag.ingest_tables import extract_pdf_tables
 from uamm.security.redaction import redact
 import logging
 
@@ -277,6 +278,34 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
             pass
         except Exception:
             pass
+
+    # Optional: add extracted tables for PDFs
+    try:
+        if settings is not None and getattr(settings, "docs_tables_enabled", False) and path.suffix.lower() == ".pdf":
+            tables = extract_pdf_tables(path)
+            for t_idx, t_text in enumerate(tables[:5]):
+                meta_i = dict(meta)
+                meta_i.update({"table": True, "table_index": t_idx})
+                tid = rag_add_doc(
+                    db_path,
+                    title=f"{title} [table {t_idx+1}]",
+                    url=url,
+                    text=t_text,
+                    meta=meta_i,
+                    workspace=getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else None,
+                    created_by="system:ingest",
+                )
+                try:
+                    if settings is not None and getattr(settings, "vector_backend", "none").lower() == "lancedb":
+                        upsert_document_embedding(
+                            settings, tid, t_text, meta={"title": title, **meta_i}
+                        )
+                except LanceDBUnavailable:
+                    pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # Record file ingestion metadata
     _ensure_corpus_files_table(db_path)

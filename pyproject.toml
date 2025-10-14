@@ -37,6 +37,16 @@ ocr = [
 chunk = [
   "tiktoken>=0.7.0"
 ]
+tables = [
+  "pdfplumber>=0.11.0"
+]
+units = [
+  "pint>=0.23"
+]
+formal = [
+  "pint>=0.23",
+  "z3-solver>=4.12.0 ; platform_machine != 'arm64'"
+]
 gcp = [
   "google-cloud-storage>=2.17.0",
   "google-cloud-kms>=2.23.0",

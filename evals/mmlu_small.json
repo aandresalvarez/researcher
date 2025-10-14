@@ -1,0 +1,5 @@
+[
+  {"question": "In biology, what molecule carries genetic information?", "correct": true, "domain": "default"},
+  {"question": "In math, is 2 a prime number?", "correct": true, "domain": "default"}
+]
+

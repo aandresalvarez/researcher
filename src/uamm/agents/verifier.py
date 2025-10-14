@@ -62,10 +62,12 @@ class _LLMVerifier:
         try:
             pydantic_ai = __import__("pydantic_ai", fromlist=["Agent"])
             openai_models = __import__(
-                "pydantic_ai.models.openai", fromlist=["OpenAIModel"]
+                "pydantic_ai.models.openai", fromlist=["OpenAIModel", "OpenAIChatModel"]
             )
             AgentCls = getattr(pydantic_ai, "Agent")
-            OpenAIModel = getattr(openai_models, "OpenAIModel")
+            OpenAIModel = getattr(openai_models, "OpenAIChatModel", None) or getattr(
+                openai_models, "OpenAIModel"
+            )
         except Exception as exc:  # pragma: no cover - dependency missing
             logging.getLogger("uamm.verifier").warning(
                 "verifier_llm_unavailable due to %s", exc
