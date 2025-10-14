@@ -1592,7 +1592,12 @@ def memory_search(request: Request, q: str, k: int = 5):
             raise
     _check_rate_limit(request)
     ws = _resolve_workspace(request)
-    eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    # Mirror env override precedence used in memory_add for test/dev parity
+    eff_db = (
+        os.getenv("UAMM_DB_PATH")
+        or getattr(request.state, "db_path", None)
+        or settings.db_path
+    )
     hits = db_search_memory(eff_db, q, k=k, workspace=ws)
     return {"hits": hits}
 
