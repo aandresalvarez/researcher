@@ -1,0 +1,16 @@
+accept_threshold: 0.90
+borderline_delta: 0.03
+tool_budget_per_refinement: 1
+tool_budget_per_turn: 3
+tools_requiring_approval:
+  - WEB_FETCH
+  - TABLE_QUERY
+docs_chunk_mode: tokens
+docs_chunk_tokens: 500
+docs_overlap_tokens: 80
+table_allowed: ["demo"]
+table_policies:
+  demo:
+    max_rows: 50
+    max_time_ms: 200
+    max_rate_per_min: 30

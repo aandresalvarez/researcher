@@ -15,6 +15,9 @@ from uamm.api.state import (
 from uamm.storage.ttl import ttl_cleaner
 from uamm.policy import cp_store
 from uamm.security.secrets import SecretManager, SecretError
+from uamm.rag.ingest import scan_folder
+from uamm.security.auth import lookup_key, parse_bearer
+from uamm.security.auth import count_keys, insert_api_key, new_key
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -31,6 +34,91 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class WorkspaceMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Simple workspace/user context from headers; defaults are safe
+        if not hasattr(request.state, "workspace"):
+            request.state.workspace = request.headers.get("X-Workspace", "default").strip() or "default"
+        if not hasattr(request.state, "user"):
+            request.state.user = request.headers.get("X-User", "anonymous").strip() or "anonymous"
+        return await call_next(request)
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        settings = request.app.state.settings
+        # Extract API key from header or Authorization
+        key = request.headers.get(settings.api_key_header)
+        if not key:
+            # be robust to case-differences across clients
+            target = settings.api_key_header.lower()
+            for k, v in request.headers.items():
+                if k.lower() == target:
+                    key = v
+                    break
+        if not key:
+            key = parse_bearer(request.headers.get("Authorization"))
+        if key:
+            rec = lookup_key(settings.db_path, key)
+            if rec and rec.active:
+                # Bind workspace and role from API key
+                request.state.workspace = rec.workspace
+                request.state.role = rec.role
+                request.state.user = f"key:{rec.label}" if rec.label else "key:unknown"
+        # If auth_required, enforce presence of valid key on protected writes at route level
+        return await call_next(request)
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        settings = request.app.state.settings
+        if not getattr(settings, "rate_limit_enabled", False):
+            return await call_next(request)
+        # Determine workspace identifier for scoping
+        from uamm.security.auth import parse_bearer, lookup_key
+        ws = request.headers.get("X-Workspace") or getattr(request.state, "workspace", None)
+        if not ws:
+            token = parse_bearer(request.headers.get("Authorization"))
+            if token:
+                rec = lookup_key(settings.db_path, token)
+                if rec and rec.active:
+                    ws = rec.workspace
+        if not ws:
+            ws = "default"
+        limiter = getattr(request.app.state, "rate_limiter", None)
+        if limiter is None:
+            limiter = {}
+            setattr(request.app.state, "rate_limiter", limiter)
+        import time as _t
+        # Select per-role or global limit
+        role = getattr(request.state, "role", None)
+        per_min = None
+        if role == "viewer":
+            per_min = getattr(settings, "rate_limit_viewer_per_minute", None)
+        elif role == "editor":
+            per_min = getattr(settings, "rate_limit_editor_per_minute", None)
+        elif role == "admin":
+            per_min = getattr(settings, "rate_limit_admin_per_minute", None)
+        if not per_min:
+            per_min = getattr(settings, "rate_limit_per_minute", 120)
+        per_min = max(1, int(per_min))
+        now = int(_t.time())
+        window = now // 60
+        state = limiter.get(ws)
+        if not state or state.get("window") != window:
+            state = {"window": window, "counts": {}}
+            limiter[ws] = state
+        counts = state["counts"]
+        role_key = role or "anonymous"
+        counts[role_key] = int(counts.get(role_key, 0)) + 1
+        total = sum(int(v or 0) for v in counts.values())
+        # Enforce per-role first, then global
+        if counts[role_key] > per_min or total > getattr(settings, "rate_limit_per_minute", 120) * 10_000:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+        return await call_next(request)
+
+
 def create_app() -> FastAPI:
     description = (
         "Uncertainty-Aware Agent with Modular Memory (UAMM). "
@@ -45,6 +133,9 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(AuthMiddleware)
+    app.add_middleware(WorkspaceMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -71,6 +162,7 @@ def create_app() -> FastAPI:
                 },
             )
         app.state.secrets = secret_manager
+        # Create base schema, then apply migrations (adds new columns), then rerun schema to ensure triggers/virtual tables exist
         ensure_schema(settings.db_path, settings.schema_path)
         ensure_migrations(settings.db_path)
         app.state.idem_store = IdempotencyStore()
@@ -114,6 +206,24 @@ def create_app() -> FastAPI:
             )
         )
 
+        # Optional background docs folder scanner
+        if getattr(settings, "docs_auto_ingest", True):
+            async def _docs_watcher():
+                try:
+                    while True:
+                        try:
+                            scan_folder(settings.db_path, settings.docs_dir, settings=settings)
+                        except Exception as exc:  # pragma: no cover - best effort
+                            logging.getLogger("uamm.rag.ingest").warning(
+                                "docs_scan_failed", extra={"error": str(exc)}
+                            )
+                        await asyncio.sleep(max(5, int(settings.docs_scan_interval_seconds)))
+                except Exception:
+                    # exit silently on shutdown/cancel
+                    return
+
+            app.state.docs_task = asyncio.create_task(_docs_watcher())
+
         # CP threshold supplier for default domain
         def _tau_supplier(domain: str = "default"):
             cache = getattr(app.state, "cp_cache", None)
@@ -131,12 +241,48 @@ def create_app() -> FastAPI:
             return tau
 
         app.state.cp_tau_supplier = _tau_supplier
+        # Seed admin API key on first run if enabled
+        if getattr(settings, "seed_admin_enabled", False):
+            try:
+                if count_keys(settings.db_path, workspace=settings.seed_admin_workspace) == 0:
+                    if settings.seed_admin_key:
+                        insert_api_key(
+                            settings.db_path,
+                            workspace=settings.seed_admin_workspace,
+                            role="admin",
+                            label=settings.seed_admin_label,
+                            token=settings.seed_admin_key,
+                        )
+                        logging.getLogger("uamm.auth").warning(
+                            "seed_admin_key_inserted",
+                            extra={"workspace": settings.seed_admin_workspace, "label": settings.seed_admin_label},
+                        )
+                    elif getattr(settings, "seed_admin_autogen", False):
+                        token = new_key(prefix=getattr(settings, "api_key_prefix", "wk_"))
+                        insert_api_key(
+                            settings.db_path,
+                            workspace=settings.seed_admin_workspace,
+                            role="admin",
+                            label=settings.seed_admin_label,
+                            token=token,
+                        )
+                        # Only log the actual token in non-prod envs
+                        if str(getattr(settings, "env", "dev")).lower() in {"dev", "test"}:
+                            logging.getLogger("uamm.auth").warning(
+                                "seed_admin_key_generated",
+                                extra={"workspace": settings.seed_admin_workspace, "label": settings.seed_admin_label, "api_key": token},
+                            )
+            except Exception as exc:
+                logging.getLogger("uamm.auth").error("seed_admin_failed", extra={"error": str(exc)})
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         task = getattr(app.state, "ttl_task", None)
         if task:
             task.cancel()
+        dtask = getattr(app.state, "docs_task", None)
+        if dtask:
+            dtask.cancel()
 
     app.include_router(api_router)
     return app

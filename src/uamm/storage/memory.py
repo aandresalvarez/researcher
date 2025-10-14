@@ -14,6 +14,8 @@ def add_memory(
     recency: float | None = None,
     tokens: int | None = None,
     embedding_model: str | None = None,
+    workspace: str | None = None,
+    created_by: str | None = None,
 ) -> str:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     try:
@@ -25,10 +27,22 @@ def add_memory(
             tokens = len(text.split())
         conn.execute(
             """
-            INSERT INTO memory (id, ts, key, text, embedding, domain, recency, tokens, embedding_model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO memory (id, ts, key, text, embedding, domain, recency, tokens, embedding_model, workspace, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (mid, ts, key, text, embedding, domain, recency, tokens, embedding_model),
+            (
+                mid,
+                ts,
+                key,
+                text,
+                embedding,
+                domain,
+                recency,
+                tokens,
+                embedding_model,
+                workspace,
+                created_by,
+            ),
         )
         # Best-effort FTS sync if virtual table exists (triggers also handle it)
         try:
@@ -50,7 +64,9 @@ def _score_text(query: str, text: str) -> float:
     return hits / max(len(q_terms), 1)
 
 
-def search_memory(db_path: str, q: str, k: int = 5) -> List[Dict[str, Any]]:
+def search_memory(
+    db_path: str, q: str, k: int = 5, *, workspace: str | None = None
+) -> List[Dict[str, Any]]:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
@@ -61,10 +77,16 @@ def search_memory(db_path: str, q: str, k: int = 5) -> List[Dict[str, Any]]:
             ).fetchone()
             if fts_exists:
                 q_str = q.strip()
-                rows = conn.execute(
-                    "SELECT m.id, m.text FROM memory_fts f JOIN memory m ON m.id=f.id WHERE f MATCH ? LIMIT ?",
-                    (q_str, k),
-                ).fetchall()
+                if workspace:
+                    rows = conn.execute(
+                        "SELECT m.id, m.text FROM memory_fts f JOIN memory m ON m.id=f.id WHERE f MATCH ? AND m.workspace = ? LIMIT ?",
+                        (q_str, workspace, k),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT m.id, m.text FROM memory_fts f JOIN memory m ON m.id=f.id WHERE f MATCH ? LIMIT ?",
+                        (q_str, k),
+                    ).fetchall()
                 out: List[Dict[str, Any]] = []
                 for r in rows:
                     out.append(
@@ -81,9 +103,15 @@ def search_memory(db_path: str, q: str, k: int = 5) -> List[Dict[str, Any]]:
             pass
 
         # naive scan fallback
-        rows = conn.execute(
-            "SELECT id, text, domain, ts FROM memory ORDER BY ts DESC LIMIT 200"
-        ).fetchall()
+        if workspace:
+            rows = conn.execute(
+                "SELECT id, text, domain, ts FROM memory WHERE workspace = ? ORDER BY ts DESC LIMIT 200",
+                (workspace,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, text, domain, ts FROM memory ORDER BY ts DESC LIMIT 200"
+            ).fetchall()
         scored: List[Tuple[float, sqlite3.Row]] = []
         for r in rows:
             s = _score_text(q, r["text"])

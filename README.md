@@ -18,7 +18,7 @@ Quick start
   - Activate venv:
     - macOS/Linux: `source .venv/bin/activate`
     - Windows PowerShell: `.\\.venv\\Scripts\\Activate.ps1`
-  - Install: `make install` (or `make install-vector` to enable optional vector backends)
+  - Install: `make install` (optional: `make install-vector` for vectors, `make install-ingest` for PDF/DOCX, `make install-ocr` for OCR, `make install-chunk` for tiktoken)
   - Run server: `make run`
   - Open docs: http://127.0.0.1:8000/docs
 
@@ -86,6 +86,22 @@ Common commands
 - Install git hooks (format/lint/type/mis‑secrets): `make pre-commit-install`
 - Run hooks now: `make pre-commit`
 
+Workspaces & Auth
+- Use `Authorization: Bearer <wk_...>` to bind workspace and role; or headers: `X-Workspace: my-team`, `X-User: alice`.
+- Roles: admin (manage), editor (write/search), viewer (search-only).
+- CLI:
+  - `make ws-cli` to view usage
+  - Create workspace: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py create my-team`
+  - Issue key: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py issue my-team editor editor-key`
+  - List keys: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py list-keys my-team`
+
+Document ingestion
+- Text: `POST /rag/docs` with `{ "title": "Report", "text": "..." }`.
+- Folder: `POST /rag/ingest-folder` with `{ "path": "data/docs/<workspace>" }`.
+- Upload: `POST /rag/upload-file` (multipart) with `file` and `filename`. Example:
+  `curl -H "Authorization: Bearer $KEY" -F file=@doc.pdf -F filename=doc.pdf http://127.0.0.1:8000/rag/upload-file`
+- Search: `GET /rag/search?q=...`.
+
 Troubleshooting
 - “ModuleNotFoundError: scripts”: ensure `PYTHONPATH=src:.` (already handled in `make test`).
 - No output on streaming: use `-N` flag in curl and keep the terminal open.
@@ -128,3 +144,31 @@ FAQ
 - Is CP actually gating? Yes. If τ exists, CP gates accept/abstain and is passed into the decision head; otherwise a static threshold is used.
 - Are PCN/GoV implemented? Yes. PCN verifies numeric tokens and GoV checks premise→claim DAGs; both stream as SSE events and persist in step traces.
 - Is memory persistent? Yes (SQLite). It has TTL cleanup and can be augmented with vector backends.
+Backups on GCP (Cloud Run + GCS)
+- Install GCP deps: `make install-gcp`
+- Export a workspace and upload to GCS:
+  - `PYTHONPATH=src .venv/bin/python scripts/gcs_backup.py my-team --bucket YOUR_BUCKET --prefix backups --api-key $ADMIN_KEY`
+  - Optional KMS encryption: add `--kms-key projects/..../cryptoKeys/YOUR_KEY` (creates `.enc.json` envelope)
+- Restore from GCS:
+  - Latest backup under a prefix: `PYTHONPATH=src .venv/bin/python scripts/gcs_restore.py my-team gs://YOUR_BUCKET/backups/ --latest --replace --reindex --api-key $ADMIN_KEY`
+  - Specific object: `PYTHONPATH=src .venv/bin/python scripts/gcs_restore.py my-team gs://YOUR_BUCKET/backups/workspace_my-team_...zip.enc.json --replace --api-key $ADMIN_KEY --reindex`
+- Cloud Run Job image:
+  - Build: `gcloud builds submit --tag gcr.io/PROJECT/uamm-gcs-backup -f jobs/cloudrun-backup.Dockerfile .`
+  - Create job with args (workspace, bucket, etc.) and schedule via Cloud Scheduler.
+  - Consider retention flags: `--retention-count 10` and/or `--retention-days 30` to prune older backups.
+
+Bundle integrity & signing
+- Workspace bundles include a `manifest.json` with per-file SHA-256, counts, and created_at.
+- Optional HMAC signing/verification:
+  - Set `UAMM_BACKUP_SIGN_KEY` on exporter and importer; import fails if signature mismatch.
+
+Full environment bundles
+- Export: `GET /config/bundle?include_db=true&workspaces=team1,team2` (admin)
+- YAML variants: `GET /config/export_yaml`, `POST /config/import_yaml`
+
+Policy packs & overlays
+- List & view: `GET /policies`, `GET /policies/{name}`
+- Apply to a workspace: `POST /workspaces/{slug}/policies/apply {"name": "clinical"}`
+- Preview diff: `GET /workspaces/{slug}/policies/preview/{name}`
+- Export/import packs: `GET /policies/export`, `POST /policies/import`
+- Overlays used by agent answers and SQL guard: thresholds, budgets, approvals, retriever weights, vectors, table allowlists/policies.

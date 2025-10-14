@@ -35,8 +35,55 @@ def ensure_migrations(db_path: str) -> None:
         if "domain" not in cols:
             conn.execute("ALTER TABLE steps ADD COLUMN domain TEXT")
             conn.commit()
+        if "workspace" not in cols:
+            conn.execute("ALTER TABLE steps ADD COLUMN workspace TEXT")
+            conn.commit()
         if "trace_json" not in cols:
             conn.execute("ALTER TABLE steps ADD COLUMN trace_json TEXT")
+            conn.commit()
+        # workspace_policies table (if missing)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS workspace_policies (workspace TEXT PRIMARY KEY, policy_name TEXT, json TEXT, updated REAL)"
+            )
+            conn.commit()
+        except Exception:
+            pass
+        # memory
+        cur = conn.execute("PRAGMA table_info(memory)")
+        mcols = {row[1] for row in cur.fetchall()}  # type: ignore[index]
+        if "workspace" not in mcols:
+            conn.execute("ALTER TABLE memory ADD COLUMN workspace TEXT")
+            conn.commit()
+        if "created_by" not in mcols:
+            conn.execute("ALTER TABLE memory ADD COLUMN created_by TEXT")
+            conn.commit()
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_workspace ON memory(workspace)")
+            conn.commit()
+        except Exception:
+            pass
+        # corpus
+        cur = conn.execute("PRAGMA table_info(corpus)")
+        ccols = {row[1] for row in cur.fetchall()}  # type: ignore[index]
+        if "workspace" not in ccols:
+            conn.execute("ALTER TABLE corpus ADD COLUMN workspace TEXT")
+            conn.commit()
+        if "created_by" not in ccols:
+            conn.execute("ALTER TABLE corpus ADD COLUMN created_by TEXT")
+            conn.commit()
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_corpus_workspace ON corpus(workspace)"
+            )
+            conn.commit()
+        except Exception:
+            pass
+        # corpus_files
+        cur = conn.execute("PRAGMA table_info(corpus_files)")
+        fcols = {row[1] for row in cur.fetchall()}  # type: ignore[index]
+        if "workspace" not in fcols:
+            conn.execute("ALTER TABLE corpus_files ADD COLUMN workspace TEXT")
             conn.commit()
     finally:
         conn.close()
@@ -66,6 +113,7 @@ def insert_step(
     is_gold: bool | None = None,
     gold_correct: bool | None = None,
     domain: str | None = None,
+    workspace: str | None = None,
     trace_json: str | None = None,
 ) -> str:
     conn = _connect(db_path)
@@ -75,10 +123,10 @@ def insert_step(
         conn.execute(
             """
             INSERT INTO steps (
-              id, ts, step, question, answer, domain, s1, s2, final_score, cp_accept,
+              id, ts, step, question, answer, domain, workspace, s1, s2, final_score, cp_accept,
               action, reason, is_refinement, status, latency_ms, usage, pack_ids,
               issues, tools_used, change_summary, eval_id, dataset_case_id, is_gold, gold_correct, trace_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 step_id,
@@ -87,6 +135,7 @@ def insert_step(
                 question_redacted,
                 answer_redacted,
                 domain,
+                workspace,
                 s1,
                 s2,
                 final_score,

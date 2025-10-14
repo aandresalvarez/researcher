@@ -58,6 +58,34 @@ class Settings:
     lancedb_table: str = os.getenv("UAMM_LANCEDB_TABLE", "rag_vectors")
     lancedb_metric: str = os.getenv("UAMM_LANCEDB_METRIC", "cosine")
     lancedb_k: int = int(os.getenv("UAMM_LANCEDB_K", "8"))
+    # Local docs ingestion
+    docs_dir: str = os.getenv("UAMM_DOCS_DIR", "data/docs")
+    docs_auto_ingest: bool = bool(int(os.getenv("UAMM_DOCS_AUTO_INGEST", "1")))
+    docs_scan_interval_seconds: int = int(os.getenv("UAMM_DOCS_SCAN_INTERVAL_SECONDS", "60"))
+    docs_chunk_chars: int = int(os.getenv("UAMM_DOCS_CHUNK_CHARS", "1400"))
+    docs_overlap_chars: int = int(os.getenv("UAMM_DOCS_OVERLAP_CHARS", "200"))
+    docs_chunk_mode: str = os.getenv("UAMM_DOCS_CHUNK_MODE", "chars")  # 'chars'|'tokens'
+    docs_chunk_tokens: int = int(os.getenv("UAMM_DOCS_CHUNK_TOKENS", "600"))
+    docs_overlap_tokens: int = int(os.getenv("UAMM_DOCS_OVERLAP_TOKENS", "100"))
+    docs_ocr_enabled: bool = bool(int(os.getenv("UAMM_DOCS_OCR_ENABLED", "1")))
+    # Seed admin (first-run)
+    seed_admin_enabled: bool = bool(int(os.getenv("UAMM_SEED_ADMIN_ENABLED", "0")))
+    seed_admin_workspace: str = os.getenv("UAMM_SEED_ADMIN_WORKSPACE", "default")
+    seed_admin_label: str = os.getenv("UAMM_SEED_ADMIN_LABEL", "seed-admin")
+    seed_admin_key: str | None = os.getenv("UAMM_SEED_ADMIN_KEY")
+    seed_admin_autogen: bool = bool(int(os.getenv("UAMM_SEED_ADMIN_AUTOGEN", "0")))
+    # Rate limiting
+    rate_limit_enabled: bool = bool(int(os.getenv("UAMM_RATE_LIMIT_ENABLED", "0")))
+    rate_limit_per_minute: int = int(os.getenv("UAMM_RATE_LIMIT_PER_MINUTE", "120"))
+    rate_limit_viewer_per_minute: int | None = (
+        int(os.getenv("UAMM_RATE_LIMIT_VIEWER_PER_MINUTE", "0")) or None
+    )
+    rate_limit_editor_per_minute: int | None = (
+        int(os.getenv("UAMM_RATE_LIMIT_EDITOR_PER_MINUTE", "0")) or None
+    )
+    rate_limit_admin_per_minute: int | None = (
+        int(os.getenv("UAMM_RATE_LIMIT_ADMIN_PER_MINUTE", "0")) or None
+    )
     # Approvals (tool pause/resume) — stub
     approvals_ttl_seconds: int = 1800
     tools_requiring_approval: list[str] = None  # type: ignore[assignment]
@@ -86,6 +114,10 @@ class Settings:
     tuner_proposal_ttl_seconds: int = int(
         os.getenv("UAMM_TUNER_PROPOSAL_TTL_SECONDS", "3600")
     )
+    # Auth
+    auth_required: bool = bool(int(os.getenv("UAMM_AUTH_REQUIRED", "0")))
+    api_key_header: str = os.getenv("UAMM_API_KEY_HEADER", "X-API-Key")
+    api_key_prefix: str = os.getenv("UAMM_API_KEY_PREFIX", "wk_")
 
 
 def load_settings() -> Settings:

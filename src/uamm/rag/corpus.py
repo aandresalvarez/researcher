@@ -13,6 +13,8 @@ def add_doc(
     url: str | None,
     text: str,
     meta: Dict[str, Any] | None = None,
+    workspace: str | None = None,
+    created_by: str | None = None,
 ) -> str:
     con = sqlite3.connect(db_path, check_same_thread=False)
     try:
@@ -20,8 +22,8 @@ def add_doc(
         ts = time.time()
         meta_blob = json.dumps(meta or {}, separators=(",", ":"))
         con.execute(
-            "INSERT INTO corpus (id, ts, title, url, text, meta) VALUES (?, ?, ?, ?, ?, ?)",
-            (did, ts, title, url, text, meta_blob),
+            "INSERT INTO corpus (id, ts, title, url, text, meta, workspace, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (did, ts, title, url, text, meta_blob, workspace, created_by),
         )
         try:
             con.execute(
@@ -61,7 +63,9 @@ def _score_text(query: str, text: str) -> float:
     return hits / max(len(q_terms), 1)
 
 
-def search_docs(db_path: str, q: str, k: int = 5) -> List[Dict[str, Any]]:
+def search_docs(
+    db_path: str, q: str, k: int = 5, *, workspace: str | None = None
+) -> List[Dict[str, Any]]:
     con = sqlite3.connect(db_path, check_same_thread=False)
     con.row_factory = sqlite3.Row
     try:
@@ -71,10 +75,16 @@ def search_docs(db_path: str, q: str, k: int = 5) -> List[Dict[str, Any]]:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='corpus_fts'"
             ).fetchone()
             if fts_exists:
-                rows = con.execute(
-                    "SELECT c.id, c.title, c.url, c.text, c.meta FROM corpus_fts f JOIN corpus c ON c.id=f.id WHERE f MATCH ? LIMIT ?",
-                    (q.strip(), k),
-                ).fetchall()
+                if workspace:
+                    rows = con.execute(
+                        "SELECT c.id, c.title, c.url, c.text, c.meta FROM corpus_fts f JOIN corpus c ON c.id=f.id WHERE f MATCH ? AND c.workspace = ? LIMIT ?",
+                        (q.strip(), workspace, k),
+                    ).fetchall()
+                else:
+                    rows = con.execute(
+                        "SELECT c.id, c.title, c.url, c.text, c.meta FROM corpus_fts f JOIN corpus c ON c.id=f.id WHERE f MATCH ? LIMIT ?",
+                        (q.strip(), k),
+                    ).fetchall()
                 return [
                     {
                         "id": r["id"],
@@ -90,9 +100,15 @@ def search_docs(db_path: str, q: str, k: int = 5) -> List[Dict[str, Any]]:
         except Exception:
             pass
         # fallback: naive scan
-        rows = con.execute(
-            "SELECT id, title, url, text, meta FROM corpus ORDER BY ts DESC LIMIT 200"
-        ).fetchall()
+        if workspace:
+            rows = con.execute(
+                "SELECT id, title, url, text, meta FROM corpus WHERE workspace = ? ORDER BY ts DESC LIMIT 200",
+                (workspace,),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT id, title, url, text, meta FROM corpus ORDER BY ts DESC LIMIT 200"
+            ).fetchall()
         scored: List[Tuple[float, sqlite3.Row]] = []
         for r in rows:
             s = _score_text(q, (r["title"] or "") + " " + (r["text"] or ""))

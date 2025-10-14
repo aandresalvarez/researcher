@@ -242,11 +242,12 @@ def retrieve(
         if total_score > existing_score + 1e-9:
             dedup[key] = candidate
             continue
-        if abs(total_score - existing_score) <= 1e-9 and _prefer_candidate(
-            candidate, existing
-        ):
-            dedup[key] = candidate
-            continue
+        # If scores are effectively tied within a small tolerance, prefer
+        # corpus items (they often carry URLs/metadata) over memory-only items.
+        if abs(total_score - existing_score) <= 2e-2:  # 0.02 tolerance
+            if _prefer_candidate(candidate, existing):
+                dedup[key] = candidate
+                continue
     ranked = sorted(dedup.values(), key=lambda x: x.get("score", 0.0), reverse=True)
     if not ranked:
         return []

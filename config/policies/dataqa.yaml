@@ -1,0 +1,9 @@
+accept_threshold: 0.85
+borderline_delta: 0.05
+tool_budget_per_refinement: 2
+tool_budget_per_turn: 4
+tools_requiring_approval: []
+docs_chunk_mode: chars
+docs_chunk_chars: 1400
+docs_overlap_chars: 200
+table_allowed: ["demo"]

@@ -8,10 +8,16 @@ import time
 import uuid
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, HTTPException, UploadFile, File
+from pathlib import Path
+import sqlite3
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from io import BytesIO
+import zipfile
+import hashlib
+import hmac
 from uamm.models.schemas import AgentResultModel, StepTraceModel
 from uamm.policy.policy import PolicyConfig
 from uamm.policy import cp_store
@@ -52,8 +58,18 @@ from uamm.security.sql_guard import is_read_only_select, tables_allowed
 from uamm.tools.table_query import table_query as db_table_query
 from uamm.tuner import TunerAgent, TunerTargets
 from uamm.rag.vector_store import LanceDBUnavailable, upsert_document_embedding
+from uamm.rag.ingest import scan_folder, make_chunks
 from uamm.gov.executor import evaluate_dag
 from uamm.gov.validator import validate_dag
+from uamm.security.auth import (
+    issue_api_key as ws_issue_key,
+    list_keys as ws_list_keys,
+    list_workspaces as ws_list,
+    get_workspace as ws_get,
+    create_workspace as ws_create,
+    deactivate_key as ws_deactivate,
+)
+from uamm.config.policy_packs import list_policies, load_policy
 
 
 router = APIRouter()
@@ -283,6 +299,7 @@ def _persist_trace_and_metrics(
         tools_used=last.tools_used,
         change_summary=last.change_summary,
         domain=req.domain,
+        workspace=getattr(request.state, "workspace", None),
         trace_json=trace_blob,
     )
     log_step(
@@ -457,6 +474,47 @@ def answer(
     q_red, _ = redact(req.question)
     t0 = time.time()
     settings = request.app.state.settings
+    # Apply workspace policy overlay (accept_threshold, borderline_delta, tool budgets)
+    try:
+        ws = _resolve_workspace(request)
+        con = sqlite3.connect(settings.db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT json FROM workspace_policies WHERE workspace = ?",
+            (ws,),
+        ).fetchone()
+        con.close()
+        if row:
+            # row["json"] is a str(dict), eval safely with ast.literal_eval
+            import ast
+            pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
+            if isinstance(pack, dict):
+                if "accept_threshold" in pack:
+                    settings.accept_threshold = float(pack["accept_threshold"])  # type: ignore[attr-defined]
+                if "borderline_delta" in pack and "borderline_delta" not in req.model_fields_set:
+                    req.borderline_delta = float(pack["borderline_delta"])  # type: ignore[assignment]
+                if "tool_budget_per_refinement" in pack:
+                    setattr(settings, "tool_budget_per_refinement", int(pack["tool_budget_per_refinement"]))
+                if "tool_budget_per_turn" in pack:
+                    setattr(settings, "tool_budget_per_turn", int(pack["tool_budget_per_turn"]))
+                if "tools_requiring_approval" in pack:
+                    setattr(settings, "tools_requiring_approval", list(pack["tools_requiring_approval"]))
+                if "rag_weight_sparse" in pack:
+                    setattr(settings, "rag_weight_sparse", float(pack["rag_weight_sparse"]))
+                if "rag_weight_dense" in pack:
+                    setattr(settings, "rag_weight_dense", float(pack["rag_weight_dense"]))
+                if "vector_backend" in pack:
+                    setattr(settings, "vector_backend", str(pack["vector_backend"]))
+                if "lancedb_uri" in pack:
+                    setattr(settings, "lancedb_uri", str(pack["lancedb_uri"]))
+                if "lancedb_table" in pack:
+                    setattr(settings, "lancedb_table", str(pack["lancedb_table"]))
+                if "lancedb_metric" in pack:
+                    setattr(settings, "lancedb_metric", str(pack["lancedb_metric"]))
+                if "lancedb_k" in pack:
+                    setattr(settings, "lancedb_k", int(pack["lancedb_k"]))
+    except Exception:
+        pass
     if "borderline_delta" not in req.model_fields_set:
         req.borderline_delta = getattr(
             settings, "borderline_delta", req.borderline_delta
@@ -684,6 +742,46 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
     request.app.state.metrics["requests"] += 1
     t0 = time.time()
     settings = request.app.state.settings
+    # Apply workspace policy overlay similar to non-streaming path
+    try:
+        ws = _resolve_workspace(request)
+        con = sqlite3.connect(settings.db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT json FROM workspace_policies WHERE workspace = ?",
+            (ws,),
+        ).fetchone()
+        con.close()
+        if row:
+            import ast
+            pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
+            if isinstance(pack, dict):
+                if "accept_threshold" in pack:
+                    settings.accept_threshold = float(pack["accept_threshold"])  # type: ignore[attr-defined]
+                if "borderline_delta" in pack and "borderline_delta" not in req.model_fields_set:
+                    req.borderline_delta = float(pack["borderline_delta"])  # type: ignore[assignment]
+                if "tool_budget_per_refinement" in pack:
+                    setattr(settings, "tool_budget_per_refinement", int(pack["tool_budget_per_refinement"]))
+                if "tool_budget_per_turn" in pack:
+                    setattr(settings, "tool_budget_per_turn", int(pack["tool_budget_per_turn"]))
+                if "tools_requiring_approval" in pack:
+                    setattr(settings, "tools_requiring_approval", list(pack["tools_requiring_approval"]))
+                if "rag_weight_sparse" in pack:
+                    setattr(settings, "rag_weight_sparse", float(pack["rag_weight_sparse"]))
+                if "rag_weight_dense" in pack:
+                    setattr(settings, "rag_weight_dense", float(pack["rag_weight_dense"]))
+                if "vector_backend" in pack:
+                    setattr(settings, "vector_backend", str(pack["vector_backend"]))
+                if "lancedb_uri" in pack:
+                    setattr(settings, "lancedb_uri", str(pack["lancedb_uri"]))
+                if "lancedb_table" in pack:
+                    setattr(settings, "lancedb_table", str(pack["lancedb_table"]))
+                if "lancedb_metric" in pack:
+                    setattr(settings, "lancedb_metric", str(pack["lancedb_metric"]))
+                if "lancedb_k" in pack:
+                    setattr(settings, "lancedb_k", int(pack["lancedb_k"]))
+    except Exception:
+        pass
     if "borderline_delta" not in req.model_fields_set:
         req.borderline_delta = getattr(
             settings, "borderline_delta", req.borderline_delta
@@ -1083,12 +1181,15 @@ class MemoryAddRequest(BaseModel):
 def memory_add(req: MemoryAddRequest, request: Request):
     """Persist a manual memory item for the active workspace/domain."""
     settings = request.app.state.settings
+    _require_role(request, {"admin", "editor"})
     red_text, _ = redact(req.text)
     mid = db_add_memory(
         settings.db_path,
         key=req.key,
         text=red_text,
         domain=req.domain,
+        workspace=getattr(request.state, "workspace", "default"),
+        created_by=getattr(request.state, "user", "anonymous"),
     )
     return {"id": mid}
 
@@ -1101,34 +1202,133 @@ class RagDocRequest(BaseModel):
 
 @router.post("/rag/docs")
 def rag_add(req: RagDocRequest, request: Request):
-    """Ingest a document into the hybrid RAG corpus."""
+    """Ingest a document into the hybrid RAG corpus.
+
+    If the text is long and chunking is configured, splits into overlapping
+    chunks and indexes each chunk for FTS and optional vector search.
+    """
     settings = request.app.state.settings
+    _require_role(request, {"admin", "editor"})
     red_text, _ = redact(req.text)
-    did = rag_add_doc(settings.db_path, title=req.title, url=req.url, text=red_text)
-    if getattr(settings, "vector_backend", "none").lower() == "lancedb":
-        meta_payload = {"title": req.title or ""}
+    chunks = make_chunks(red_text, settings=settings)
+    if not chunks:
+        chunks = [red_text]
+    ids: list[str] = []
+    for idx, segment in enumerate(chunks):
+        meta = {"title": req.title or "", "chunk_index": idx, "chunk_total": len(chunks)}
         if req.url:
-            meta_payload["url"] = req.url
-        try:
-            upsert_document_embedding(settings, did, red_text, meta=meta_payload)
-        except LanceDBUnavailable:
-            logging.getLogger("uamm.rag.vector").warning(
-                "lancedb_dependency_missing",
-                extra={"doc_id": did, "uri": getattr(settings, "lancedb_uri", "")},
-            )
-        except Exception as exc:  # pragma: no cover - best effort cache
-            logging.getLogger("uamm.rag.vector").warning(
-                "lancedb_upsert_failed",
-                extra={"doc_id": did, "error": str(exc)},
-            )
-    return {"id": did}
+            meta["url"] = req.url
+        did = rag_add_doc(
+            settings.db_path,
+            title=req.title,
+            url=req.url,
+            text=segment,
+            meta=meta,
+            workspace=getattr(request.state, "workspace", "default"),
+            created_by=getattr(request.state, "user", "anonymous"),
+        )
+        ids.append(did)
+        if getattr(settings, "vector_backend", "none").lower() == "lancedb":
+            try:
+                upsert_document_embedding(settings, did, segment, meta=meta)
+            except LanceDBUnavailable:
+                logging.getLogger("uamm.rag.vector").warning(
+                    "lancedb_dependency_missing",
+                    extra={"doc_id": did, "uri": getattr(settings, "lancedb_uri", "")},
+                )
+            except Exception as exc:  # pragma: no cover - best effort cache
+                logging.getLogger("uamm.rag.vector").warning(
+                    "lancedb_upsert_failed",
+                    extra={"doc_id": did, "error": str(exc)},
+                )
+    return {"ids": ids}
+
+
+class RagIngestFolderRequest(BaseModel):
+    path: str | None = None
+
+
+@router.post("/rag/ingest-folder")
+def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
+    """Scan and ingest documents from a local folder.
+
+    If `path` is omitted, uses `settings.docs_dir`. Only text/markdown/html files
+    up to 2MB are processed. Results include counts of ingested and skipped files.
+    """
+    settings = request.app.state.settings
+    _require_role(request, {"admin", "editor"})
+    base = req.path or getattr(settings, "docs_dir", "data/docs")
+    # Restrict to configured base directory for safety
+    configured = Path(getattr(settings, "docs_dir", "data/docs")).resolve()
+    target = Path(base).resolve()
+    if configured not in target.parents and configured != target:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "path must be within configured docs_dir"},
+        )
+    stats = scan_folder(settings.db_path, str(target), settings=settings)
+    return {"ok": True, "path": str(target), **stats}
+
+
+@router.post("/rag/upload-file")
+async def rag_upload_file(request: Request, file: UploadFile = File(...), filename: str | None = None):
+    """Upload a single document and ingest into the current workspace.
+
+    Requires editor/admin role when auth is enabled.
+    """
+    _require_role(request, {"admin", "editor"})
+    settings = request.app.state.settings
+    ws = _resolve_workspace(request)
+    docs_root = Path(getattr(settings, "docs_dir", "data/docs")).resolve()
+    target_dir = docs_root / ws
+    target_dir.mkdir(parents=True, exist_ok=True)
+    fn = filename or (file.filename or "upload.bin")
+    dest = target_dir / Path(fn).name
+    data = await file.read()
+    if len(data or b"") > 2 * 1024 * 1024:
+        return JSONResponse(status_code=400, content={"error": "file_too_large"})
+    dest.write_bytes(data or b"")
+    stats = scan_folder(settings.db_path, str(target_dir), settings=settings)
+    return {"ok": True, "workspace": ws, **stats}
+
+
+@router.post("/rag/upload-files")
+async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)):
+    """Upload multiple documents into the current workspace. Editor/admin only when auth is enabled."""
+    _require_role(request, {"admin", "editor"})
+    settings = request.app.state.settings
+    ws = _resolve_workspace(request)
+    docs_root = Path(getattr(settings, "docs_dir", "data/docs")).resolve()
+    target_dir = docs_root / ws
+    target_dir.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    skipped = 0
+    for uf in files or []:
+        fn = (uf.filename or "upload.bin").strip()
+        data = await uf.read()
+        if len(data or b"") > 2 * 1024 * 1024:
+            skipped += 1
+            continue
+        (target_dir / Path(fn).name).write_bytes(data or b"")
+        saved += 1
+    stats = scan_folder(settings.db_path, str(target_dir), settings=settings)
+    return {"ok": True, "workspace": ws, "saved": saved, "skipped": skipped, **stats}
 
 
 @router.get("/rag/search")
 def rag_search(request: Request, q: str, k: int = 5):
     """Search the RAG corpus for relevant snippets."""
     settings = request.app.state.settings
-    hits = rag_search_docs(settings.db_path, q, k=k)
+    # View permission sufficient for reads when auth is enabled
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        # If auth is disabled, _require_role may still raise; we ignore if disabled
+        if getattr(settings, "auth_required", False):
+            raise
+    _check_rate_limit(request)
+    ws = _resolve_workspace(request)
+    hits = rag_search_docs(settings.db_path, q, k=k, workspace=ws)
     return {"hits": hits}
 
 
@@ -1136,7 +1336,14 @@ def rag_search(request: Request, q: str, k: int = 5):
 def memory_search(request: Request, q: str, k: int = 5):
     """Search previously stored memory items."""
     settings = request.app.state.settings
-    hits = db_search_memory(settings.db_path, q, k=k)
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    _check_rate_limit(request)
+    ws = _resolve_workspace(request)
+    hits = db_search_memory(settings.db_path, q, k=k, workspace=ws)
     return {"hits": hits}
 
 
@@ -1149,9 +1356,19 @@ class MemoryPackRequest(BaseModel):
 def memory_pack(req: MemoryPackRequest, request: Request):
     """Build a memory pack constrained by the supplied budget."""
     settings = request.app.state.settings
-    hits = db_search_memory(settings.db_path, req.question, k=req.memory_budget)
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    _check_rate_limit(request)
+    ws = _resolve_workspace(request)
+    hits = db_search_memory(settings.db_path, req.question, k=req.memory_budget, workspace=ws)
     pack = [MemoryPackItem(**h) for h in hits]
     return {"pack": [p.model_dump() for p in pack]}
+
+
+# (Removed duplicate workspace endpoints, see consolidated definitions below.)
 
 
 class PackMergeRequest(BaseModel):
@@ -1166,8 +1383,15 @@ class PackMergeRequest(BaseModel):
 def pack_merge(req: PackMergeRequest, request: Request):
     """Merge memory and corpus hits into a single prioritized pack."""
     settings = request.app.state.settings
-    m_hits = db_search_memory(settings.db_path, req.question, k=req.memory_k)
-    c_hits = rag_search_docs(settings.db_path, req.question, k=req.corpus_k)
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    _check_rate_limit(request)
+    ws = _resolve_workspace(request)
+    m_hits = db_search_memory(settings.db_path, req.question, k=req.memory_k, workspace=ws)
+    c_hits = rag_search_docs(settings.db_path, req.question, k=req.corpus_k, workspace=ws)
     # Normalize corpus hits to MemoryPackItem shape
     c_norm = [
         {
@@ -1190,6 +1414,175 @@ def pack_merge(req: PackMergeRequest, request: Request):
     ]
     pack = [MemoryPackItem(**i) for i in items]
     return {"pack": [p.model_dump() for p in pack]}
+
+
+# Workspaces & Keys
+class WorkspaceCreateRequest(BaseModel):
+    slug: str
+    name: str | None = None
+
+
+@router.post("/workspaces")
+def workspace_create(req: WorkspaceCreateRequest, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    con = sqlite3.connect(settings.db_path)
+    try:
+        ws_create(con, req.slug, req.name or req.slug)
+    finally:
+        con.close()
+    ws = ws_get(settings.db_path, req.slug)
+    return {"workspace": ws}
+
+
+@router.get("/workspaces")
+def workspace_list(request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    return {"workspaces": ws_list(settings.db_path)}
+
+
+@router.get("/workspaces/{slug}")
+def workspace_get(slug: str, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    ws = ws_get(settings.db_path, slug)
+    if not ws:
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    return {"workspace": ws}
+
+
+class IssueKeyRequest(BaseModel):
+    role: str
+    label: str
+
+
+@router.post("/workspaces/{slug}/keys")
+def workspace_issue_key(slug: str, req: IssueKeyRequest, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    token = ws_issue_key(
+        settings.db_path,
+        workspace=slug,
+        role=req.role,
+        label=req.label,
+        prefix=getattr(settings, "api_key_prefix", "wk_"),
+    )
+    return {"api_key": token}
+
+
+@router.get("/workspaces/{slug}/keys")
+def workspace_list_keys(slug: str, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    keys = ws_list_keys(settings.db_path, workspace=slug)
+    redacted = [
+        {
+            "id": k.id,
+            "workspace": k.workspace,
+            "role": k.role,
+            "label": k.label,
+            "active": k.active,
+            "created": k.created,
+        }
+        for k in keys
+    ]
+    return {"keys": redacted}
+
+
+@router.post("/workspaces/{slug}/keys/{key_id}/deactivate")
+def workspace_deactivate_key(slug: str, key_id: str, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    ws_deactivate(settings.db_path, key_id=key_id)
+    return {"ok": True}
+
+
+# Workspace members
+class MemberRequest(BaseModel):
+    user_id: str
+    role: str
+
+
+@router.post("/workspaces/{slug}/members")
+def workspace_add_member(slug: str, req: MemberRequest, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    con = sqlite3.connect(settings.db_path)
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO workspace_members(workspace, user_id, role, added) VALUES (?, ?, ?, ?)",
+            (slug, req.user_id, req.role, time.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+@router.get("/workspaces/{slug}/members")
+def workspace_list_members(slug: str, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    con = sqlite3.connect(settings.db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT workspace, user_id, role, added FROM workspace_members WHERE workspace = ?",
+            (slug,),
+        ).fetchall()
+    finally:
+        con.close()
+    return {
+        "members": [
+            {"workspace": r["workspace"], "user_id": r["user_id"], "role": r["role"], "added": float(r["added"])}
+            for r in rows
+        ]
+    }
+
+
+@router.delete("/workspaces/{slug}/members/{user_id}")
+def workspace_remove_member(slug: str, user_id: str, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    con = sqlite3.connect(settings.db_path)
+    try:
+        con.execute(
+            "DELETE FROM workspace_members WHERE workspace = ? AND user_id = ?",
+            (slug, user_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+# Audit
+@router.get("/audit/contributions")
+def audit_contributions(request: Request, user: str | None = None):
+    settings = request.app.state.settings
+    ws = _resolve_workspace(request)
+    con = sqlite3.connect(settings.db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        params = [ws]
+        where_user = ""
+        if user:
+            where_user = " AND created_by = ?"
+            params.append(user)
+        mem = con.execute(
+            f"SELECT created_by, COUNT(*) as n, MAX(ts) as last_ts FROM memory WHERE workspace = ?{where_user} GROUP BY created_by"
+        , params).fetchall()
+        cor = con.execute(
+            f"SELECT created_by, COUNT(*) as n, MAX(ts) as last_ts FROM corpus WHERE workspace = ?{where_user} GROUP BY created_by"
+        , params).fetchall()
+    finally:
+        con.close()
+    return {
+        "workspace": ws,
+        "memory": [{"created_by": r["created_by"], "n": int(r["n"]), "last_ts": float(r["last_ts"]) if r["last_ts"] is not None else None} for r in mem],
+        "corpus": [{"created_by": r["created_by"], "n": int(r["n"]), "last_ts": float(r["last_ts"]) if r["last_ts"] is not None else None} for r in cor],
+    }
 
 
 class ToolsApproveRequest(BaseModel):
@@ -2338,6 +2731,29 @@ class TableQueryRequest(BaseModel):
 @router.post("/table/query")
 def table_query(req: TableQueryRequest, request: Request):
     settings = request.app.state.settings
+    import sqlite3 as _sqlite3  # ensure name for overlay
+    # Apply workspace policy overlay for table guard resolution
+    try:
+        ws = _resolve_workspace(request)
+        con = _sqlite3.connect(settings.db_path)
+        con.row_factory = _sqlite3.Row
+        row = con.execute(
+            "SELECT json FROM workspace_policies WHERE workspace = ?",
+            (ws,),
+        ).fetchone()
+        con.close()
+        if row:
+            import ast
+            pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
+            if isinstance(pack, dict):
+                if "table_allowed" in pack:
+                    settings.table_allowed = list(pack["table_allowed"])  # type: ignore[attr-defined]
+                if "table_policies" in pack:
+                    settings.table_policies = dict(pack["table_policies"])  # type: ignore[attr-defined]
+                if "table_allowed_by_domain" in pack:
+                    settings.table_allowed_by_domain = dict(pack["table_allowed_by_domain"])  # type: ignore[attr-defined]
+    except Exception:
+        pass
     sql = req.sql
     if not is_read_only_select(sql):
         return JSONResponse(
@@ -2425,3 +2841,705 @@ def table_query(req: TableQueryRequest, request: Request):
 
 
 # Duplicate CP endpoints removed; see canonical definitions earlier in file
+def _require_role(request: Request, allowed: set[str]) -> None:
+    settings = request.app.state.settings
+    # Only enforce when auth is required; endpoints can still call this opt-in
+    import os
+    required = bool(getattr(settings, "auth_required", False)) or os.getenv("UAMM_AUTH_REQUIRED", "0") == "1"
+    if not required:
+        return
+    # Ensure we have a resolved role; resolve inline if middleware didn't run
+    role = getattr(request.state, "role", None)
+    if role is None:
+        from uamm.security.auth import lookup_key, parse_bearer
+        key = request.headers.get(getattr(settings, "api_key_header", "X-API-Key"))
+        if not key:
+            key = parse_bearer(request.headers.get("Authorization"))
+        if not key:
+            raise HTTPException(status_code=401, detail="missing_api_key")
+        rec = lookup_key(settings.db_path, key)
+        if not rec or not rec.active:
+            raise HTTPException(status_code=401, detail="invalid_api_key")
+        request.state.role = rec.role
+        request.state.workspace = rec.workspace
+        request.state.user = f"key:{rec.label}" if rec.label else "key:unknown"
+        role = rec.role
+    if role not in allowed:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
+def _check_rate_limit(request: Request) -> None:
+    settings = request.app.state.settings
+    if not getattr(settings, "rate_limit_enabled", False):
+        return
+    ws = _resolve_workspace(request)
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if limiter is None:
+        limiter = {}
+        setattr(request.app.state, "rate_limiter", limiter)
+    import time as _t
+    role = getattr(request.state, "role", None)
+    per_min = None
+    if role == "viewer":
+        per_min = getattr(settings, "rate_limit_viewer_per_minute", None)
+    elif role == "editor":
+        per_min = getattr(settings, "rate_limit_editor_per_minute", None)
+    elif role == "admin":
+        per_min = getattr(settings, "rate_limit_admin_per_minute", None)
+    if not per_min:
+        per_min = getattr(settings, "rate_limit_per_minute", 120)
+    per_min = max(1, int(per_min))
+    now = int(_t.time())
+    window = now // 60
+    state = limiter.get(ws)
+    if not state or state.get("window") != window:
+        state = {"window": window, "counts": {}}
+        limiter[ws] = state
+    counts = state["counts"]
+    role_key = role or "anonymous"
+    counts[role_key] = int(counts.get(role_key, 0)) + 1
+    if counts[role_key] > per_min:
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+
+
+def _resolve_workspace(request: Request) -> str:
+    ws = getattr(request.state, "workspace", None)
+    if ws:
+        return ws
+    from uamm.security.auth import lookup_key, parse_bearer
+    settings = request.app.state.settings
+    key = request.headers.get(getattr(settings, "api_key_header", "X-API-Key"))
+    if not key:
+        key = parse_bearer(request.headers.get("Authorization"))
+    if key:
+        rec = lookup_key(settings.db_path, key)
+        if rec and rec.active:
+            request.state.workspace = rec.workspace
+            request.state.role = rec.role
+            request.state.user = f"key:{rec.label}" if rec.label else "key:unknown"
+            return rec.workspace
+    ws = request.headers.get("X-Workspace", "default").strip() or "default"
+    request.state.workspace = ws
+    return ws
+# Settings management (ops)
+@router.get("/settings")
+def settings_get(request: Request):
+    settings = request.app.state.settings
+    snap = {
+        "env": getattr(settings, "env", None),
+        "accept_threshold": getattr(settings, "accept_threshold", None),
+        "borderline_delta": getattr(settings, "borderline_delta", None),
+        "snne_samples": getattr(settings, "snne_samples", None),
+        "snne_tau": getattr(settings, "snne_tau", None),
+        "max_refinement_steps": getattr(settings, "max_refinement_steps", None),
+        "cp_target_mis": getattr(settings, "cp_target_mis", None),
+        "rate_limit_enabled": getattr(settings, "rate_limit_enabled", False),
+        "rate_limit_per_minute": getattr(settings, "rate_limit_per_minute", 120),
+        "docs_chunk_mode": getattr(settings, "docs_chunk_mode", "chars"),
+        "docs_chunk_chars": getattr(settings, "docs_chunk_chars", 1400),
+        "docs_overlap_chars": getattr(settings, "docs_overlap_chars", 200),
+        "docs_chunk_tokens": getattr(settings, "docs_chunk_tokens", 600),
+        "docs_overlap_tokens": getattr(settings, "docs_overlap_tokens", 100),
+        "docs_ocr_enabled": getattr(settings, "docs_ocr_enabled", True),
+        "vector_backend": getattr(settings, "vector_backend", "none"),
+        "lancedb_uri": getattr(settings, "lancedb_uri", None),
+        "lancedb_table": getattr(settings, "lancedb_table", None),
+        "lancedb_metric": getattr(settings, "lancedb_metric", None),
+        "lancedb_k": getattr(settings, "lancedb_k", None),
+        "egress_block_private_ip": getattr(settings, "egress_block_private_ip", None),
+        "egress_enforce_tls": getattr(settings, "egress_enforce_tls", None),
+        "egress_allow_redirects": getattr(settings, "egress_allow_redirects", None),
+        "egress_max_payload_bytes": getattr(settings, "egress_max_payload_bytes", None),
+        "egress_allowlist_hosts": getattr(settings, "egress_allowlist_hosts", []),
+        "egress_denylist_hosts": getattr(settings, "egress_denylist_hosts", []),
+        "tools_requiring_approval": getattr(settings, "tools_requiring_approval", []),
+    }
+    return {"settings": snap}
+
+
+class SettingsPatchRequest(BaseModel):
+    changes: Dict[str, Any]
+
+
+@router.patch("/settings")
+def settings_patch(req: SettingsPatchRequest, request: Request):
+    settings = request.app.state.settings
+    allowed = {
+        "accept_threshold", "borderline_delta", "snne_samples", "snne_tau",
+        "max_refinement_steps", "cp_target_mis",
+        "rate_limit_enabled", "rate_limit_per_minute",
+        "docs_chunk_mode", "docs_chunk_chars", "docs_overlap_chars",
+        "docs_chunk_tokens", "docs_overlap_tokens", "docs_ocr_enabled",
+        "vector_backend", "lancedb_uri", "lancedb_table", "lancedb_metric", "lancedb_k",
+        "egress_block_private_ip", "egress_enforce_tls", "egress_allow_redirects",
+        "egress_max_payload_bytes", "egress_allowlist_hosts", "egress_denylist_hosts",
+        "tools_requiring_approval",
+    }
+    applied: Dict[str, Any] = {}
+    for k, v in (req.changes or {}).items():
+        if k not in allowed:
+            continue
+        # Coerce types for known scalars
+        if k in {"accept_threshold", "borderline_delta", "snne_tau", "cp_target_mis"}:
+            v = float(v)
+        if k in {"snne_samples", "max_refinement_steps", "rate_limit_per_minute", "lancedb_k", "egress_allow_redirects", "egress_max_payload_bytes"}:
+            v = int(v)
+        if k in {"rate_limit_enabled", "docs_ocr_enabled", "egress_block_private_ip", "egress_enforce_tls"}:
+            v = bool(v)
+        setattr(settings, k, v)
+        applied[k] = getattr(settings, k)
+    return {"applied": applied}
+
+
+# Policy packs (workspace-scoped)
+@router.get("/policies")
+def policies_list():
+    return {"policies": list_policies()}
+
+
+@router.get("/policies/{name}")
+def policies_get(name: str):
+    pack = load_policy(name)
+    if not pack:
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    return {"name": name, "policy": pack}
+
+
+@router.get("/policies/export")
+def policies_export(request: Request):
+    # Export current policy files as a zip
+    from io import BytesIO
+    import zipfile
+    _require_role(request, {"admin"})
+    buf = BytesIO()
+    base = Path(os.getenv("UAMM_POLICIES_DIR", "config/policies")).resolve()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
+        if base.exists():
+            for p in base.glob("*.yaml"):
+                z.writestr(p.name, p.read_text(encoding="utf-8"))
+    buf.seek(0)
+    headers = {"Content-Disposition": "attachment; filename=policies.zip"}
+    return Response(content=buf.read(), media_type="application/zip", headers=headers)
+
+
+@router.post("/policies/import")
+async def policies_import(request: Request, file: UploadFile = File(...)):
+    # Import a zip of YAML policy files into the policies directory. Admin only.
+    import zipfile
+    from io import BytesIO
+    _require_role(request, {"admin"})
+    data = await file.read()
+    if not data:
+        return JSONResponse(status_code=400, content={"error": "missing_file"})
+    try:
+        z = zipfile.ZipFile(BytesIO(data))
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_zip"})
+    base = Path(os.getenv("UAMM_POLICIES_DIR", "config/policies")).resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    imported = 0
+    for name in z.namelist():
+        if not name.lower().endswith(".yaml"):
+            continue
+        # Prevent path traversal
+        safe = Path(name).name
+        content = z.read(name)
+        try:
+            text = content.decode("utf-8")
+        except Exception:
+            continue
+        (base / safe).write_text(text, encoding="utf-8")
+        imported += 1
+    return {"ok": True, "imported": imported}
+
+
+@router.get("/workspaces/{slug}/policies/preview/{name}")
+def policies_preview(slug: str, name: str, request: Request):
+    """Preview differences between current applied policy and a named pack."""
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    import ast
+    new_pack = load_policy(name)
+    if not new_pack:
+        return JSONResponse(status_code=404, content={"error": "unknown_policy"})
+    con = sqlite3.connect(settings.db_path)
+    con.row_factory = sqlite3.Row
+    row = con.execute(
+        "SELECT json FROM workspace_policies WHERE workspace = ?",
+        (slug,),
+    ).fetchone()
+    con.close()
+    old_pack = {}
+    if row and row["json"]:
+        try:
+            old_pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
+        except Exception:
+            old_pack = {}
+    keys = set(list(old_pack.keys()) + list(new_pack.keys()))
+    diff = {}
+    for k in sorted(keys):
+        ov = old_pack.get(k)
+        nv = new_pack.get(k)
+        if ov != nv:
+            diff[k] = {"old": ov, "new": nv}
+    return {"workspace": slug, "policy": name, "diff": diff}
+
+
+class ApplyPolicyRequest(BaseModel):
+    name: str
+
+
+@router.post("/workspaces/{slug}/policies/apply")
+def policies_apply(slug: str, req: ApplyPolicyRequest, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    pack = load_policy(req.name)
+    if not pack:
+        return JSONResponse(status_code=404, content={"error": "unknown_policy"})
+    con = sqlite3.connect(settings.db_path)
+    try:
+        import time as _t
+        con.execute(
+            "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
+            (slug, req.name, str(pack), _t.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"workspace": slug, "applied": req.name}
+
+
+@router.get("/workspaces/{slug}/policies")
+def policies_current(slug: str, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    con = sqlite3.connect(settings.db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT workspace, policy_name, json, updated FROM workspace_policies WHERE workspace = ?",
+            (slug,),
+        ).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return {"workspace": slug, "policy": None}
+    return {
+        "workspace": row["workspace"],
+        "name": row["policy_name"],
+        "policy": row["json"],
+        "updated": float(row["updated"]) if row["updated"] is not None else None,
+    }
+@router.get("/config/export")
+def config_export(request: Request):
+    settings = request.app.state.settings
+    # Global settings snapshot reusing /settings fields
+    snap = settings_get(request)["settings"]
+    # Export applied workspace policies
+    con = sqlite3.connect(settings.db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT workspace, policy_name, json, updated FROM workspace_policies"
+        ).fetchall()
+    finally:
+        con.close()
+    ws_policies = [
+        {
+            "workspace": r["workspace"],
+            "policy_name": r["policy_name"],
+            "policy": r["json"],
+            "updated": float(r["updated"]) if r["updated"] is not None else None,
+        }
+        for r in rows
+    ]
+    return {"settings": snap, "workspace_policies": ws_policies}
+
+
+@router.get("/config/bundle")
+def config_bundle(request: Request, include_db: bool = False, workspaces: str | None = None):
+    """Export a full environment bundle (zip) with settings.json, workspace_policies.json, and optional SQLite DB.
+
+    Use include_db=true cautiously; it contains all workspace data.
+    """
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
+        # settings.json
+        import json as _json
+        z.writestr("settings.json", _json.dumps(settings_get(request)["settings"], indent=2))
+        # workspace_policies.json
+        con = sqlite3.connect(settings.db_path)
+        con.row_factory = sqlite3.Row
+        if workspaces:
+            ws_list = [w.strip() for w in workspaces.split(",") if w.strip()]
+            qmarks = ",".join(["?"] * len(ws_list)) or "?"
+            rows = con.execute(
+                f"SELECT workspace, policy_name, json, updated FROM workspace_policies WHERE workspace IN ({qmarks})",
+                ws_list if ws_list else [""],
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT workspace, policy_name, json, updated FROM workspace_policies"
+            ).fetchall()
+        con.close()
+        policies = [
+            {
+                "workspace": r["workspace"],
+                "policy_name": r["policy_name"],
+                "policy": r["json"],
+                "updated": float(r["updated"]) if r["updated"] is not None else None,
+            }
+            for r in rows
+        ]
+        z.writestr("workspace_policies.json", _json.dumps(policies, indent=2))
+        if include_db and os.path.exists(settings.db_path):
+            with open(settings.db_path, "rb") as f:
+                z.writestr(Path(settings.db_path).name, f.read())
+    buf.seek(0)
+    headers = {"Content-Disposition": "attachment; filename=env_bundle.zip"}
+    return Response(content=buf.read(), media_type="application/zip", headers=headers)
+
+
+@router.get("/workspaces/{slug}/export")
+def workspace_export(slug: str, request: Request, since_ts: float | None = None, until_ts: float | None = None):
+    """Export a workspace bundle (zip) with memory/corpus/steps JSON and applied policy.
+
+    Intended for migrating content between environments.
+    """
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
+        import json as _json
+        con = sqlite3.connect(settings.db_path)
+        con.row_factory = sqlite3.Row
+        # Pull rows
+        if since_ts or until_ts:
+            mem = con.execute(
+                "SELECT id, ts, key, text, domain, recency, tokens, embedding_model FROM memory WHERE workspace = ? AND ts BETWEEN ? AND ?",
+                (slug, since_ts or 0.0, until_ts or 1e12),
+            ).fetchall()
+            cor = con.execute(
+                "SELECT id, ts, title, url, text, meta FROM corpus WHERE workspace = ? AND ts BETWEEN ? AND ?",
+                (slug, since_ts or 0.0, until_ts or 1e12),
+            ).fetchall()
+            steps = con.execute(
+                "SELECT id, ts, step, question, answer, domain, s1, s2, final_score, cp_accept, action, reason, is_refinement, status, latency_ms, usage, pack_ids, issues, tools_used, change_summary, trace_json FROM steps WHERE workspace = ? AND ts BETWEEN ? AND ?",
+                (slug, since_ts or 0.0, until_ts or 1e12),
+            ).fetchall()
+        else:
+            mem = con.execute(
+                "SELECT id, ts, key, text, domain, recency, tokens, embedding_model FROM memory WHERE workspace = ?",
+                (slug,),
+            ).fetchall()
+            cor = con.execute(
+                "SELECT id, ts, title, url, text, meta FROM corpus WHERE workspace = ?",
+                (slug,),
+            ).fetchall()
+            steps = con.execute(
+                "SELECT id, ts, step, question, answer, domain, s1, s2, final_score, cp_accept, action, reason, is_refinement, status, latency_ms, usage, pack_ids, issues, tools_used, change_summary, trace_json FROM steps WHERE workspace = ?",
+                (slug,),
+            ).fetchall()
+        # Build json bytes and checksums
+        files = {}
+        mem_bytes = _json.dumps([dict(r) for r in mem], indent=2).encode("utf-8")
+        z.writestr("memory.json", mem_bytes)
+        files["memory.json"] = {
+            "sha256": hashlib.sha256(mem_bytes).hexdigest(),
+            "bytes": len(mem_bytes),
+            "count": len(mem),
+        }
+        cor_bytes = _json.dumps([dict(r) for r in cor], indent=2).encode("utf-8")
+        z.writestr("corpus.json", cor_bytes)
+        files["corpus.json"] = {
+            "sha256": hashlib.sha256(cor_bytes).hexdigest(),
+            "bytes": len(cor_bytes),
+            "count": len(cor),
+        }
+        steps_bytes = _json.dumps([dict(r) for r in steps], indent=2).encode("utf-8")
+        z.writestr("steps.json", steps_bytes)
+        files["steps.json"] = {
+            "sha256": hashlib.sha256(steps_bytes).hexdigest(),
+            "bytes": len(steps_bytes),
+            "count": len(steps),
+        }
+        pol = con.execute(
+            "SELECT policy_name, json, updated FROM workspace_policies WHERE workspace = ?",
+            (slug,),
+        ).fetchone()
+        con.close()
+        if pol:
+            pol_bytes = _json.dumps({"name": pol["policy_name"], "policy": pol["json"], "updated": pol["updated"]}, indent=2).encode("utf-8")
+            z.writestr("policy.json", pol_bytes)
+            files["policy.json"] = {
+                "sha256": hashlib.sha256(pol_bytes).hexdigest(),
+                "bytes": len(pol_bytes),
+                "count": 1,
+            }
+        # Write manifest with optional HMAC
+        import time as _t
+        manifest = {
+            "schema_version": "1.0",
+            "type": "workspace_bundle",
+            "workspace": slug,
+            "created_at": _t.time(),
+            "files": files,
+        }
+        key = os.getenv("UAMM_BACKUP_SIGN_KEY")
+        if key:
+            mcopy = dict(manifest)
+            mcopy["hmac"] = None
+            serialized = _json.dumps(mcopy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            sig = hmac.new(key.encode("utf-8"), serialized, hashlib.sha256).hexdigest()
+            manifest["hmac"] = sig
+        z.writestr("manifest.json", _json.dumps(manifest, indent=2))
+    buf.seek(0)
+    headers = {"Content-Disposition": f"attachment; filename=workspace_{slug}.zip"}
+    return Response(content=buf.read(), media_type="application/zip", headers=headers)
+
+
+@router.post("/workspaces/{slug}/import")
+async def workspace_import(slug: str, request: Request, file: UploadFile = File(...), replace: bool = False):
+    """Import a workspace bundle (zip) with memory/corpus/steps/policy. Admin only.
+
+    Records are merged; duplicate IDs are ignored.
+    """
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    data = await file.read()
+    if not data:
+        return JSONResponse(status_code=400, content={"error": "missing_file"})
+    try:
+        z = zipfile.ZipFile(BytesIO(data))
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_zip"})
+    import json as _json
+    con = sqlite3.connect(settings.db_path)
+    try:
+        # Verify manifest if present
+        try:
+            manifest = _json.loads(z.read("manifest.json").decode("utf-8"))
+            files = manifest.get("files", {})
+            # Verify hmac if key provided
+            key = os.getenv("UAMM_BACKUP_SIGN_KEY")
+            if key and "hmac" in manifest:
+                mcopy = dict(manifest)
+                sig = mcopy.pop("hmac", None)
+                serialized = _json.dumps(mcopy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                vsig = hmac.new(key.encode("utf-8"), serialized, hashlib.sha256).hexdigest()
+                if sig != vsig:
+                    return JSONResponse(status_code=400, content={"error": "invalid_signature"})
+            # Verify checksums
+            for name in ["memory.json", "corpus.json", "steps.json", "policy.json"]:
+                if name in z.namelist() and name in files:
+                    data_bytes = z.read(name)
+                    csum = hashlib.sha256(data_bytes).hexdigest()
+                    if csum != files[name].get("sha256"):
+                        return JSONResponse(status_code=400, content={"error": f"checksum_mismatch:{name}"})
+        except KeyError:
+            pass
+        except Exception:
+            # ignore malformed manifest; import proceeds without verification
+            pass
+        if replace:
+            # delete existing rows for workspace (policy retained until new policy applied)
+            con.execute("DELETE FROM memory WHERE workspace = ?", (slug,))
+            con.execute("DELETE FROM corpus WHERE workspace = ?", (slug,))
+            con.execute("DELETE FROM steps WHERE workspace = ?", (slug,))
+            con.execute("DELETE FROM workspace_policies WHERE workspace = ?", (slug,))
+        # memory
+        try:
+            mem = _json.loads(z.read("memory.json").decode("utf-8"))
+            for r in mem:
+                con.execute(
+                    "INSERT OR IGNORE INTO memory(id, ts, key, text, embedding, domain, recency, tokens, embedding_model, workspace, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        r.get("id"), r.get("ts"), r.get("key"), r.get("text"), None, r.get("domain"), r.get("recency"), r.get("tokens"), r.get("embedding_model"), slug, r.get("created_by", "import")
+                    ),
+                )
+        except Exception:
+            pass
+        # corpus
+        try:
+            cor = _json.loads(z.read("corpus.json").decode("utf-8"))
+            for r in cor:
+                con.execute(
+                    "INSERT OR IGNORE INTO corpus(id, ts, title, url, text, meta, workspace, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        r.get("id"), r.get("ts"), r.get("title"), r.get("url"), r.get("text"), r.get("meta"), slug, r.get("created_by", "import")
+                    ),
+                )
+        except Exception:
+            pass
+        # steps (optional)
+        try:
+            steps = _json.loads(z.read("steps.json").decode("utf-8"))
+            for r in steps:
+                con.execute(
+                    "INSERT OR IGNORE INTO steps(id, ts, step, question, answer, domain, workspace, s1, s2, final_score, cp_accept, action, reason, is_refinement, status, latency_ms, usage, pack_ids, issues, tools_used, change_summary, trace_json, eval_id, dataset_case_id, is_gold, gold_correct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        r.get("id"), r.get("ts"), r.get("step", 0), r.get("question"), r.get("answer"), r.get("domain"), slug, r.get("s1"), r.get("s2"), r.get("final_score"), 1 if r.get("cp_accept") else 0, r.get("action"), r.get("reason"), 1 if r.get("is_refinement") else 0, r.get("status"), r.get("latency_ms", 0), str(r.get("usage")), str(r.get("pack_ids")), str(r.get("issues")), str(r.get("tools_used")), r.get("change_summary"), r.get("trace_json"), r.get("eval_id"), r.get("dataset_case_id"), r.get("is_gold"), r.get("gold_correct"),
+                    ),
+                )
+        except Exception:
+            pass
+        # policy
+        try:
+            pol = _json.loads(z.read("policy.json").decode("utf-8"))
+            con.execute(
+                "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
+                (slug, pol.get("name", "bundle"), pol.get("policy"), pol.get("updated")),
+            )
+        except Exception:
+            pass
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+@router.post("/workspaces/{slug}/vector/reindex")
+def vector_reindex(slug: str, request: Request, since_ts: float | None = None, until_ts: float | None = None, limit: int | None = None):
+    """Rebuild vector embeddings for corpus documents in a workspace (admin only).
+
+    Only effective when vector_backend=lancedb. Returns counts of attempts and successes.
+    """
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    backend = str(getattr(settings, "vector_backend", "none") or "none").lower()
+    if backend != "lancedb":
+        return {"workspace": slug, "ok": False, "reason": "vector_backend_not_lancedb"}
+    import sqlite3 as _sqlite3
+    con = _sqlite3.connect(settings.db_path)
+    con.row_factory = _sqlite3.Row
+    try:
+        args = [slug]
+        where = "WHERE workspace = ?"
+        if since_ts or until_ts:
+            where += " AND ts BETWEEN ? AND ?"
+            args.extend([since_ts or 0.0, until_ts or 1e12])
+        sql = f"SELECT id, text, title, url FROM corpus {where} ORDER BY ts DESC"
+        if limit and limit > 0:
+            sql += " LIMIT ?"
+            args.append(int(limit))
+        rows = con.execute(sql, args).fetchall()
+    finally:
+        con.close()
+    attempted = 0
+    upserted = 0
+    errors = 0
+    for r in rows:
+        attempted += 1
+        text = r["text"] or ""
+        meta = {"title": r["title"] or ""}
+        if r["url"]:
+            meta["url"] = r["url"]
+        try:
+            upsert_document_embedding(settings, r["id"], text, meta=meta)
+            upserted += 1
+        except LanceDBUnavailable:
+            return {"workspace": slug, "ok": False, "reason": "lancedb_unavailable", "attempted": attempted, "upserted": upserted, "errors": errors}
+        except Exception:
+            errors += 1
+    return {"workspace": slug, "ok": True, "attempted": attempted, "upserted": upserted, "errors": errors}
+
+
+class ConfigImportRequest(BaseModel):
+    settings: Dict[str, Any] | None = None
+    workspace_policies: List[Dict[str, Any]] | None = None
+
+
+@router.post("/config/import")
+def config_import(req: ConfigImportRequest, request: Request):
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    # Apply settings (same allowed keys as /settings PATCH)
+    if req.settings:
+        patch_req = SettingsPatchRequest(changes=req.settings)
+        settings_patch(patch_req, request)
+    # Apply workspace policies
+    applied = []
+    if req.workspace_policies:
+        con = sqlite3.connect(settings.db_path)
+        try:
+            import time as _t
+            import ast
+            for item in req.workspace_policies:
+                ws = str(item.get("workspace", "")).strip()
+                if not ws:
+                    continue
+                name = item.get("policy_name")
+                policy_json = None
+                if name:
+                    pack = load_policy(str(name))
+                    if not pack:
+                        continue
+                    policy_json = str(pack)
+                    pname = str(name)
+                else:
+                    # Accept inline policy dict
+                    inline = item.get("policy")
+                    try:
+                        if isinstance(inline, str):
+                            inline = ast.literal_eval(inline)
+                        if not isinstance(inline, dict):
+                            continue
+                        policy_json = str(inline)
+                        pname = "inline"
+                    except Exception:
+                        continue
+                con.execute(
+                    "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
+                    (ws, pname, policy_json, _t.time()),
+                )
+                applied.append({"workspace": ws, "name": pname})
+            con.commit()
+        finally:
+            con.close()
+    return {"ok": True, "applied": applied}
+
+
+@router.get("/config/export_yaml")
+def config_export_yaml(request: Request):
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "yaml_not_available"})
+    data = config_export(request)
+    text = yaml.safe_dump(data, sort_keys=False)
+    headers = {"Content-Type": "application/x-yaml"}
+    return Response(content=text, media_type="application/x-yaml", headers=headers)
+
+
+@router.post("/config/import_yaml")
+async def config_import_yaml(request: Request, file: UploadFile = File(...)):
+    _require_role(request, {"admin"})
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "yaml_not_available"})
+    data = await file.read()
+    try:
+        payload = yaml.safe_load(data) or {}
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_yaml"})
+    req = ConfigImportRequest(**payload)
+    return config_import(req, request)
+@router.get("/rate_limits")
+def rate_limits_status(request: Request):
+    settings = request.app.state.settings
+    rl = getattr(request.app.state, "rate_limiter", {})
+    out = {}
+    for ws, state in rl.items():
+        counts = state.get("counts", {})
+        out[ws] = {"window": state.get("window"), "counts": counts}
+    limits = {
+        "enabled": getattr(settings, "rate_limit_enabled", False),
+        "global_per_minute": getattr(settings, "rate_limit_per_minute", 120),
+        "viewer_per_minute": getattr(settings, "rate_limit_viewer_per_minute", None),
+        "editor_per_minute": getattr(settings, "rate_limit_editor_per_minute", None),
+        "admin_per_minute": getattr(settings, "rate_limit_admin_per_minute", None),
+    }
+    return {"limits": limits, "windows": out}

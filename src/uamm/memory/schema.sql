@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS memory (
   domain TEXT,      -- "fact"|"trace"|"summary"|"tool"
   recency REAL,
   tokens INT,
-  embedding_model TEXT
+  embedding_model TEXT,
+  workspace TEXT,   -- workspace slug
+  created_by TEXT   -- user or api key label
 );
 CREATE INDEX IF NOT EXISTS idx_mem_key_ts ON memory(key, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_mem_domain ON memory(domain);
@@ -35,7 +37,9 @@ CREATE TABLE IF NOT EXISTS corpus (
   title TEXT,
   url TEXT,
   text TEXT,
-  meta TEXT
+  meta TEXT,
+  workspace TEXT,   -- workspace slug
+  created_by TEXT   -- user or api key label
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(id, title, text);
@@ -49,6 +53,15 @@ END;
 CREATE TRIGGER IF NOT EXISTS corpus_ad AFTER DELETE ON corpus BEGIN
   DELETE FROM corpus_fts WHERE id = old.id;
 END;
+
+-- Track local files ingested into the corpus to avoid reprocessing
+CREATE TABLE IF NOT EXISTS corpus_files (
+  path TEXT PRIMARY KEY,
+  mtime REAL,
+  doc_id TEXT,
+  meta TEXT,
+  workspace TEXT
+);
 
 -- CP calibration artifacts (bootstrap)
 CREATE TABLE IF NOT EXISTS cp_artifacts (
@@ -91,6 +104,7 @@ CREATE TABLE IF NOT EXISTS steps (
   question TEXT,        -- REDACTED text only
   answer TEXT,          -- REDACTED text only
   domain TEXT,          -- request domain (e.g., biomed|analytics|code)
+  workspace TEXT,       -- workspace slug
   s1 REAL,               -- SNNE_norm or SE_norm
   s2 REAL,
   final_score REAL,
@@ -110,4 +124,40 @@ CREATE TABLE IF NOT EXISTS steps (
   dataset_case_id TEXT,
   is_gold INTEGER,
   gold_correct INTEGER
+);
+
+-- Workspaces & access control (simple)
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY,
+  slug TEXT UNIQUE,
+  name TEXT,
+  created REAL
+);
+
+CREATE TABLE IF NOT EXISTS workspace_keys (
+  id TEXT PRIMARY KEY,
+  workspace TEXT,
+  key_hash TEXT,
+  role TEXT,       -- admin|editor|viewer
+  label TEXT,
+  active INTEGER,
+  created REAL
+);
+CREATE INDEX IF NOT EXISTS idx_ws_keys_ws ON workspace_keys(workspace);
+CREATE INDEX IF NOT EXISTS idx_ws_keys_hash ON workspace_keys(key_hash);
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+  workspace TEXT,
+  user_id TEXT,
+  role TEXT,
+  added REAL,
+  PRIMARY KEY (workspace, user_id)
+);
+
+-- Workspace policy packs (applied configuration overlays)
+CREATE TABLE IF NOT EXISTS workspace_policies (
+  workspace TEXT PRIMARY KEY,
+  policy_name TEXT,
+  json TEXT,
+  updated REAL
 );
