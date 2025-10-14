@@ -18,7 +18,9 @@ def test_mcp_math_eval_adapter_executes():
     assert int(out["value"]) == 4
 
 
-@pytest.mark.skipif(os.getenv("UAMM_SKIP_NETWORK", "1") == "1", reason="Avoid network in CI")
+@pytest.mark.skipif(
+    os.getenv("UAMM_SKIP_NETWORK", "1") == "1", reason="Avoid network in CI"
+)
 def test_mcp_web_search_fixture(monkeypatch):
     # Provide a fixture-backed search
     monkeypatch.setenv("UAMM_WEB_SEARCH_FIXTURE", "tests/data/web_search_results.json")
@@ -26,4 +28,3 @@ def test_mcp_web_search_fixture(monkeypatch):
     out = adapters["WEB_SEARCH"]("report", k=1)
     assert out["status"] == "ok"
     assert len(out["results"]) == 1
-

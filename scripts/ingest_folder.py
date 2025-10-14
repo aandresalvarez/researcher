@@ -17,8 +17,12 @@ from uamm.rag.ingest import scan_folder
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest local folder into corpus")
-    parser.add_argument("--db", default=None, help="Path to sqlite DB (defaults to settings)")
-    parser.add_argument("--folder", default=None, help="Folder to scan (defaults to settings.docs_dir)")
+    parser.add_argument(
+        "--db", default=None, help="Path to sqlite DB (defaults to settings)"
+    )
+    parser.add_argument(
+        "--folder", default=None, help="Folder to scan (defaults to settings.docs_dir)"
+    )
     args = parser.parse_args()
 
     settings = load_settings()

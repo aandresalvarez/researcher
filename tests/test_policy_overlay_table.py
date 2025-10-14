@@ -32,9 +32,25 @@ def test_policy_overlay_applies_to_table_guard(tmp_path, monkeypatch):
 
     def fake_lookup_key(db_path: str, token: str):
         if token == admin_key:
-            return APIKeyRecord(id="1", workspace="ws1", key_hash="h1", role="admin", label="a", active=True, created=0.0)
+            return APIKeyRecord(
+                id="1",
+                workspace="ws1",
+                key_hash="h1",
+                role="admin",
+                label="a",
+                active=True,
+                created=0.0,
+            )
         if token == editor_key:
-            return APIKeyRecord(id="2", workspace="ws1", key_hash="h2", role="editor", label="e", active=True, created=0.0)
+            return APIKeyRecord(
+                id="2",
+                workspace="ws1",
+                key_hash="h2",
+                role="editor",
+                label="e",
+                active=True,
+                created=0.0,
+            )
         return None
 
     monkeypatch.setattr("uamm.security.auth.lookup_key", fake_lookup_key)
@@ -54,4 +70,3 @@ def test_policy_overlay_applies_to_table_guard(tmp_path, monkeypatch):
             json={"sql": "SELECT * FROM demo", "params": []},
         )
         assert q.status_code == 403
-

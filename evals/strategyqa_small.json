@@ -2,4 +2,3 @@
   {"question": "Do birds typically have wings?", "correct": true, "domain": "default"},
   {"question": "Is water dry?", "correct": false, "domain": "default"}
 ]
-

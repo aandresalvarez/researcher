@@ -82,7 +82,9 @@ def _sentences(text: str) -> List[str]:
     return _dedupe([p.strip() for p in parts if p.strip()])
 
 
-def extract_claims(answer: str, *, min_words: int = 4, max_words: int = 50) -> List[str]:
+def extract_claims(
+    answer: str, *, min_words: int = 4, max_words: int = 50
+) -> List[str]:
     """Extract simple sentence-level claims from an answer.
 
     Filters trivial or very long sentences to keep scoring meaningful.
@@ -175,7 +177,9 @@ def compute_faithfulness(
             "supported_count": 0,
             "unsupported_claims": [],
         }
-    supported, unsupported = align_claims_to_evidence(claims, evidence_pack, threshold=threshold)
+    supported, unsupported = align_claims_to_evidence(
+        claims, evidence_pack, threshold=threshold
+    )
     score = float(supported) / float(len(claims)) if claims else None
     return {
         "score": score,

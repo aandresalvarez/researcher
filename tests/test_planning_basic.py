@@ -22,4 +22,3 @@ def test_planning_event_emitted_when_enabled():
     _ = agent.answer(params=params, emit=emit)
     kinds = [k for (k, _) in events]
     assert "planning" in kinds, f"planning event missing in {kinds}"
-

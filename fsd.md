@@ -299,4 +299,3 @@ PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py create team1 --root da
 
 - Should ingestion endpoints themselves be gated by a `TOOLS_INGEST` capability? For now, rely on role (editor/admin) and workspace policy; can add later.
 - Background watchers across many workspaces: opt‑in via a `workspace_watch_all` setting to avoid surprises in prod.
-

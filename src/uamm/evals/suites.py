@@ -195,13 +195,29 @@ def summarize_records(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     # Optional enrichments
     tools_list = [int(r.get("tools", 0) or 0) for r in recs if "tools" in r]
     avg_tools = (sum(tools_list) / len(tools_list)) if tools_list else None
-    faith_list = [float(r.get("faithfulness")) for r in recs if isinstance(r.get("faithfulness"), (float, int))]
+    faith_list = [
+        float(r.get("faithfulness"))
+        for r in recs
+        if isinstance(r.get("faithfulness"), (float, int))
+    ]
     avg_faith = (sum(faith_list) / len(faith_list)) if faith_list else None
-    plan_list = [bool(r.get("planning_improved")) for r in recs if "planning_improved" in r]
-    plan_improve_rate = (sum(1 for v in plan_list if v) / len(plan_list)) if plan_list else None
-    toks_list = [int(r.get("tokens_estimate")) for r in recs if isinstance(r.get("tokens_estimate"), int)]
+    plan_list = [
+        bool(r.get("planning_improved")) for r in recs if "planning_improved" in r
+    ]
+    plan_improve_rate = (
+        (sum(1 for v in plan_list if v) / len(plan_list)) if plan_list else None
+    )
+    toks_list = [
+        int(r.get("tokens_estimate"))
+        for r in recs
+        if isinstance(r.get("tokens_estimate"), int)
+    ]
     avg_tokens = (sum(toks_list) / len(toks_list)) if toks_list else None
-    cost_list = [float(r.get("cost_estimate")) for r in recs if isinstance(r.get("cost_estimate"), (float, int))]
+    cost_list = [
+        float(r.get("cost_estimate"))
+        for r in recs
+        if isinstance(r.get("cost_estimate"), (float, int))
+    ]
     total_cost = sum(cost_list) if cost_list else 0.0
     return {
         "total": total,

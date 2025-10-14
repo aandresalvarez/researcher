@@ -61,25 +61,37 @@ class Settings:
     # Local docs ingestion
     docs_dir: str = os.getenv("UAMM_DOCS_DIR", "data/docs")
     docs_auto_ingest: bool = bool(int(os.getenv("UAMM_DOCS_AUTO_INGEST", "1")))
-    docs_scan_interval_seconds: int = int(os.getenv("UAMM_DOCS_SCAN_INTERVAL_SECONDS", "60"))
+    docs_scan_interval_seconds: int = int(
+        os.getenv("UAMM_DOCS_SCAN_INTERVAL_SECONDS", "60")
+    )
     docs_chunk_chars: int = int(os.getenv("UAMM_DOCS_CHUNK_CHARS", "1400"))
     docs_overlap_chars: int = int(os.getenv("UAMM_DOCS_OVERLAP_CHARS", "200"))
-    docs_chunk_mode: str = os.getenv("UAMM_DOCS_CHUNK_MODE", "chars")  # 'chars'|'tokens'
+    docs_chunk_mode: str = os.getenv(
+        "UAMM_DOCS_CHUNK_MODE", "chars"
+    )  # 'chars'|'tokens'
     docs_chunk_tokens: int = int(os.getenv("UAMM_DOCS_CHUNK_TOKENS", "600"))
     docs_overlap_tokens: int = int(os.getenv("UAMM_DOCS_OVERLAP_TOKENS", "100"))
     docs_ocr_enabled: bool = bool(int(os.getenv("UAMM_DOCS_OCR_ENABLED", "1")))
     docs_tables_enabled: bool = bool(int(os.getenv("UAMM_DOCS_TABLES_ENABLED", "0")))
     # Memory promotion
-    memory_promotion_enabled: bool = bool(int(os.getenv("UAMM_MEMORY_PROMOTION_ENABLED", "0")))
-    memory_promotion_min_support: int = int(os.getenv("UAMM_MEMORY_PROMOTION_MIN_SUPPORT", "3"))
+    memory_promotion_enabled: bool = bool(
+        int(os.getenv("UAMM_MEMORY_PROMOTION_ENABLED", "0"))
+    )
+    memory_promotion_min_support: int = int(
+        os.getenv("UAMM_MEMORY_PROMOTION_MIN_SUPPORT", "3")
+    )
     # Planning (selective search over thoughts)
     planning_enabled: bool = bool(int(os.getenv("UAMM_PLANNING_ENABLED", "0")))
     planning_mode: str = os.getenv("UAMM_PLANNING_MODE", "tot")
     planning_budget: int = int(os.getenv("UAMM_PLANNING_BUDGET", "3"))
-    planning_when: str = os.getenv("UAMM_PLANNING_WHEN", "borderline")  # 'always'|'borderline'|'iterate'
+    planning_when: str = os.getenv(
+        "UAMM_PLANNING_WHEN", "borderline"
+    )  # 'always'|'borderline'|'iterate'
     # Faithfulness
     faithfulness_enabled: bool = bool(int(os.getenv("UAMM_FAITHFULNESS_ENABLED", "1")))
-    faithfulness_threshold: float = float(os.getenv("UAMM_FAITHFULNESS_THRESHOLD", "0.6"))
+    faithfulness_threshold: float = float(
+        os.getenv("UAMM_FAITHFULNESS_THRESHOLD", "0.6")
+    )
     faithfulness_use_llm: bool = bool(int(os.getenv("UAMM_FAITHFULNESS_USE_LLM", "0")))
     # Guardrails
     guardrails_enabled: bool = bool(int(os.getenv("UAMM_GUARDRAILS_ENABLED", "0")))
@@ -183,7 +195,13 @@ def load_settings() -> Settings:
     if s.tools_requiring_approval is None:
         s.tools_requiring_approval = []
     if s.mcp_tools_expose is None:
-        s.mcp_tools_expose = ["WEB_SEARCH", "WEB_FETCH", "MATH_EVAL", "TABLE_QUERY", "UAMM_ANSWER"]
+        s.mcp_tools_expose = [
+            "WEB_SEARCH",
+            "WEB_FETCH",
+            "MATH_EVAL",
+            "TABLE_QUERY",
+            "UAMM_ANSWER",
+        ]
     if s.secrets is None:
         s.secrets = {}
     if not s.vector_backend:
@@ -195,7 +213,10 @@ def load_settings() -> Settings:
         s.workspace_base_dirs = [p for p in (x.strip() for x in raw.split(",")) if p]
     # Default restriction: enable in non-dev if not explicitly set
     try:
-        if str(s.env).lower() not in {"dev", "test"} and os.getenv("UAMM_WORKSPACE_RESTRICT_TO_BASES") is None:
+        if (
+            str(s.env).lower() not in {"dev", "test"}
+            and os.getenv("UAMM_WORKSPACE_RESTRICT_TO_BASES") is None
+        ):
             s.workspace_restrict_to_bases = True
     except Exception:
         pass

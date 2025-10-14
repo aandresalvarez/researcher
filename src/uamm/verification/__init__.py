@@ -11,4 +11,3 @@ from .faithfulness import (
     align_claims_to_evidence,
     compute_faithfulness,
 )
-

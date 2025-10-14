@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 
-
 def validate_numeric_unit(value: float | int | str, unit: str) -> bool:
     """Validate that a numeric value is compatible with a given unit.
 

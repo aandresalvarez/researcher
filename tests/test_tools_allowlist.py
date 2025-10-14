@@ -23,7 +23,9 @@ def test_table_query_blocked_by_tools_allowlist(tmp_path, monkeypatch):
     # Policy dir with tools_allowed
     pol_dir = tmp_path / "policies"
     pol_dir.mkdir()
-    (pol_dir / "no_table.yaml").write_text("tools_allowed:\n  - MATH_EVAL\n", encoding="utf-8")
+    (pol_dir / "no_table.yaml").write_text(
+        "tools_allowed:\n  - MATH_EVAL\n", encoding="utf-8"
+    )
     monkeypatch.setenv("UAMM_POLICIES_DIR", str(pol_dir))
 
     app = create_app()
@@ -34,11 +36,23 @@ def test_table_query_blocked_by_tools_allowlist(tmp_path, monkeypatch):
     def fake_lookup_key(db_path: str, token: str):
         if token == admin_key:
             return APIKeyRecord(
-                id="1", workspace="team1", key_hash="h1", role="admin", label="adm", active=True, created=0.0
+                id="1",
+                workspace="team1",
+                key_hash="h1",
+                role="admin",
+                label="adm",
+                active=True,
+                created=0.0,
             )
         if token == editor_key:
             return APIKeyRecord(
-                id="2", workspace="team1", key_hash="h2", role="editor", label="ed", active=True, created=0.0
+                id="2",
+                workspace="team1",
+                key_hash="h2",
+                role="editor",
+                label="ed",
+                active=True,
+                created=0.0,
             )
         return None
 

@@ -8,9 +8,13 @@ from uamm.mcp.server import run
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run UAMM MCP server (Pydantic AI MCP)")
+    parser = argparse.ArgumentParser(
+        description="Run UAMM MCP server (Pydantic AI MCP)"
+    )
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (if supported)")
-    parser.add_argument("--port", type=int, default=8765, help="Bind port (if supported)")
+    parser.add_argument(
+        "--port", type=int, default=8765, help="Bind port (if supported)"
+    )
     args = parser.parse_args()
     try:
         run(host=args.host, port=args.port)
@@ -22,4 +26,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

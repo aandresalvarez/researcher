@@ -130,7 +130,6 @@ def _ocr_pdf(path: Path) -> Optional[str]:
             "ocr_failed", extra={"path": str(path), "error": str(exc)}
         )
         return None
-    
 
 
 def chunk_text(text: str, *, chunk_chars: int, overlap_chars: int) -> list[str]:
@@ -233,7 +232,10 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
     payload = _read_file_text(path)
     if payload is None:
         # Fallback to OCR for PDF if enabled
-        if getattr(settings, "docs_ocr_enabled", True) and path.suffix.lower() == ".pdf":
+        if (
+            getattr(settings, "docs_ocr_enabled", True)
+            and path.suffix.lower() == ".pdf"
+        ):
             text = _ocr_pdf(path)
             if text and text.strip():
                 payload = (path.stem, text)
@@ -262,7 +264,11 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
             url=url,
             text=segment,
             meta=meta_i,
-            workspace=getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else None,
+            workspace=getattr(
+                settings, "workspace", getattr(settings, "default_workspace", "default")
+            )
+            if settings
+            else None,
             created_by="system:ingest",
         )
         if first_id is None:
@@ -270,7 +276,10 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
         chunk_ids.append(did)
         # Optional vector embedding per chunk
         try:
-            if settings is not None and getattr(settings, "vector_backend", "none").lower() == "lancedb":
+            if (
+                settings is not None
+                and getattr(settings, "vector_backend", "none").lower() == "lancedb"
+            ):
                 upsert_document_embedding(
                     settings, did, segment, meta={"title": title, **meta_i}
                 )
@@ -281,22 +290,36 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
 
     # Optional: add extracted tables for PDFs
     try:
-        if settings is not None and getattr(settings, "docs_tables_enabled", False) and path.suffix.lower() == ".pdf":
+        if (
+            settings is not None
+            and getattr(settings, "docs_tables_enabled", False)
+            and path.suffix.lower() == ".pdf"
+        ):
             tables = extract_pdf_tables(path)
             for t_idx, t_text in enumerate(tables[:5]):
                 meta_i = dict(meta)
                 meta_i.update({"table": True, "table_index": t_idx})
                 tid = rag_add_doc(
                     db_path,
-                    title=f"{title} [table {t_idx+1}]",
+                    title=f"{title} [table {t_idx + 1}]",
                     url=url,
                     text=t_text,
                     meta=meta_i,
-                    workspace=getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else None,
+                    workspace=getattr(
+                        settings,
+                        "workspace",
+                        getattr(settings, "default_workspace", "default"),
+                    )
+                    if settings
+                    else None,
                     created_by="system:ingest",
                 )
                 try:
-                    if settings is not None and getattr(settings, "vector_backend", "none").lower() == "lancedb":
+                    if (
+                        settings is not None
+                        and getattr(settings, "vector_backend", "none").lower()
+                        == "lancedb"
+                    ):
                         upsert_document_embedding(
                             settings, tid, t_text, meta={"title": title, **meta_i}
                         )
@@ -313,7 +336,7 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
     try:
         mtime = path.stat().st_mtime
         # Store the first chunk id and a small meta payload
-        meta_blob = "{" + f"\"chunks\":{len(chunk_ids)}" + "}"
+        meta_blob = "{" + f'"chunks":{len(chunk_ids)}' + "}"
         con.execute(
             "INSERT OR REPLACE INTO corpus_files(path, mtime, doc_id, meta) VALUES (?, ?, ?, ?)",
             (str(path), mtime, first_id, meta_blob),

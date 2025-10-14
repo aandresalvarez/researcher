@@ -15,7 +15,10 @@ def test_compute_faithfulness_alignment():
         " The telescope has 100 members and includes several cities."
     )
     pack = [
-        {"snippet": "Smith 2019 reports that Protein X causes Y in mice.", "title": "Protein study"},
+        {
+            "snippet": "Smith 2019 reports that Protein X causes Y in mice.",
+            "title": "Protein study",
+        },
         {"snippet": "The observatory partners include labs in five cities."},
     ]
     out = compute_faithfulness(answer, pack, threshold=0.2)
@@ -24,4 +27,3 @@ def test_compute_faithfulness_alignment():
     assert out["supported_count"] >= 1
     assert out["supported_count"] <= out["claim_count"]
     assert isinstance(out["score"], float) or out["score"] is None
-

@@ -33,7 +33,10 @@ class GuardrailsConfig:
     @staticmethod
     def load(path: Optional[str]) -> "GuardrailsConfig":
         if not path or not yaml:
-            return GuardrailsConfig(block_terms=list(_DEFAULT_BLOCK_TERMS), deny_regex=list(_DEFAULT_DENY_REGEX))
+            return GuardrailsConfig(
+                block_terms=list(_DEFAULT_BLOCK_TERMS),
+                deny_regex=list(_DEFAULT_DENY_REGEX),
+            )
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -41,7 +44,10 @@ class GuardrailsConfig:
             deny_regex = list(data.get("deny_regex", _DEFAULT_DENY_REGEX) or [])
             return GuardrailsConfig(block_terms=block_terms, deny_regex=deny_regex)
         except Exception:
-            return GuardrailsConfig(block_terms=list(_DEFAULT_BLOCK_TERMS), deny_regex=list(_DEFAULT_DENY_REGEX))
+            return GuardrailsConfig(
+                block_terms=list(_DEFAULT_BLOCK_TERMS),
+                deny_regex=list(_DEFAULT_DENY_REGEX),
+            )
 
 
 def _check_terms(text: str, terms: List[str]) -> List[str]:

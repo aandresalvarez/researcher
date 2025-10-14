@@ -50,7 +50,14 @@ def _score_candidate(
     # small tilt towards candidates addressing issues
     if needs_fix and isinstance(s1, (int, float)):
         s1 = min(1.0, float(s1) + 0.1 * len(issues))
-    return float(s1), raw if isinstance(raw, (int, float)) else None, samples, float(s2), list(issues), bool(needs_fix)
+    return (
+        float(s1),
+        raw if isinstance(raw, (int, float)) else None,
+        samples,
+        float(s2),
+        list(issues),
+        bool(needs_fix),
+    )
 
 
 def plan_best_answer(
@@ -134,7 +141,11 @@ def plan_best_answer(
             except Exception:
                 variants = []
             # filter seen and empties
-            children = [v.strip() for v in variants if isinstance(v, str) and v.strip() and v not in all_seen]
+            children = [
+                v.strip()
+                for v in variants
+                if isinstance(v, str) and v.strip() and v not in all_seen
+            ]
             if not children:
                 continue
             # score children, pick best child; if better than current, move to it

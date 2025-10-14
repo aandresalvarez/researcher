@@ -305,7 +305,9 @@ class PlanningNode(FlujoNode[PlanningInput, PlanningOutput]):
             verifier=Verifier(),
             policy_cfg=PolicyConfig(),
             sample_count=payload.sample_count,
-            config=PlanningConfig(mode=payload.planning_mode, budget=payload.planning_budget),
+            config=PlanningConfig(
+                mode=payload.planning_mode, budget=payload.planning_budget
+            ),
         )
         return PlanningOutput(**out)
 

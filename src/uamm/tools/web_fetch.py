@@ -73,7 +73,9 @@ def web_fetch(url: str, policy: EgressPolicy | None = None) -> FetchResult:
     host_lc = (parsed.hostname or "").lower()
     if policy.enforce_tls and parsed.scheme != "https":
         raise ValueError("TLS required")
-    allow = [h.lower() for h in policy.allowlist_hosts] if policy.allowlist_hosts else []
+    allow = (
+        [h.lower() for h in policy.allowlist_hosts] if policy.allowlist_hosts else []
+    )
     deny = [h.lower() for h in policy.denylist_hosts] if policy.denylist_hosts else []
     if allow and host_lc not in allow:
         raise ValueError("host not allowed")

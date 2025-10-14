@@ -1,15 +1,13 @@
-"""
-Example policy pack combining SQL checks and GoV assertions.
-
-Apply to a workspace:
-  curl -X POST \
-    -H "Authorization: Bearer $ADMIN_KEY" \
-    -H 'content-type: application/json' \
-    -d '{"name":"example_checks_assertions"}' \
-    http://127.0.0.1:8000/workspaces/my-team/policies/apply
-
-Use GoV assertions by fetching this pack and passing `gov_assertions` to `/gov/check`.
-"""
+# Example policy pack combining SQL checks and GoV assertions.
+#
+# Apply to a workspace:
+#   curl -X POST \
+#     -H "Authorization: Bearer $ADMIN_KEY" \
+#     -H 'content-type: application/json' \
+#     -d '{"name":"example_checks_assertions"}' \
+#     http://127.0.0.1:8000/workspaces/my-team/policies/apply
+#
+# Use GoV assertions by fetching this pack and passing `gov_assertions` to `/gov/check`.
 
 tools_allowed:
   - WEB_SEARCH
@@ -44,4 +42,3 @@ gov_assertions:
   - predicate: path_exists
     source: a
     target: b
-

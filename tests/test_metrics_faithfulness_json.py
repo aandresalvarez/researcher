@@ -20,4 +20,3 @@ def test_metrics_contains_faithfulness(monkeypatch, tmp_path):
         assert r.status_code == 200
         data = r.json()
         assert "faithfulness" in data or "faithfulness_summary" in data
-

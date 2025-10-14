@@ -27,7 +27,13 @@ def test_workspace_root_creation_init_fs(tmp_path, monkeypatch):
     def fake_lookup_key(db_path: str, token: str):
         if token == admin_key:
             return APIKeyRecord(
-                id="1", workspace="rooted", key_hash="h1", role="admin", label="adm", active=True, created=0.0
+                id="1",
+                workspace="rooted",
+                key_hash="h1",
+                role="admin",
+                label="adm",
+                active=True,
+                created=0.0,
             )
         return None
 
@@ -47,4 +53,3 @@ def test_workspace_root_creation_init_fs(tmp_path, monkeypatch):
         # FS initialized
         assert (ws_root / "uamm.sqlite").exists()
         assert (ws_root / "docs").exists()
-

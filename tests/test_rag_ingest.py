@@ -2,7 +2,13 @@ from pathlib import Path
 
 from uamm.config.settings import Settings
 from uamm.storage.db import ensure_schema
-from uamm.rag.ingest import scan_folder, ingest_file, chunk_text, token_chunk_text, make_chunks
+from uamm.rag.ingest import (
+    scan_folder,
+    ingest_file,
+    chunk_text,
+    token_chunk_text,
+    make_chunks,
+)
 from uamm.rag.corpus import search_docs
 
 

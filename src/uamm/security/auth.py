@@ -38,7 +38,10 @@ def new_key(prefix: str = "wk_", length: int = 24) -> str:
 
 
 def create_workspace(
-    conn: sqlite3.Connection, slug: str, name: Optional[str] = None, root: Optional[str] = None
+    conn: sqlite3.Connection,
+    slug: str,
+    name: Optional[str] = None,
+    root: Optional[str] = None,
 ) -> str:
     ws_id = str(uuid.uuid4())
     ts = time.time()
@@ -57,7 +60,9 @@ def create_workspace(
     return ws_id
 
 
-def issue_api_key(db_path: str, *, workspace: str, role: str, label: str, prefix: str = "wk_") -> str:
+def issue_api_key(
+    db_path: str, *, workspace: str, role: str, label: str, prefix: str = "wk_"
+) -> str:
     conn = _connect(db_path)
     try:
         # ensure workspace exists
@@ -137,9 +142,13 @@ def list_workspaces(db_path: str) -> list[dict]:
     conn = _connect(db_path)
     try:
         try:
-            rows = conn.execute("SELECT id, slug, name, created, root FROM workspaces").fetchall()
+            rows = conn.execute(
+                "SELECT id, slug, name, created, root FROM workspaces"
+            ).fetchall()
         except Exception:
-            rows = conn.execute("SELECT id, slug, name, created FROM workspaces").fetchall()
+            rows = conn.execute(
+                "SELECT id, slug, name, created FROM workspaces"
+            ).fetchall()
         out: list[dict] = []
         for r in rows:
             item = dict(
@@ -197,15 +206,22 @@ def count_keys(db_path: str, *, workspace: str | None = None) -> int:
     conn = _connect(db_path)
     try:
         if workspace:
-            row = conn.execute("SELECT COUNT(*) FROM workspace_keys WHERE workspace=? AND active=1", (workspace,)).fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM workspace_keys WHERE workspace=? AND active=1",
+                (workspace,),
+            ).fetchone()
         else:
-            row = conn.execute("SELECT COUNT(*) FROM workspace_keys WHERE active=1").fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM workspace_keys WHERE active=1"
+            ).fetchone()
         return int(row[0]) if row else 0
     finally:
         conn.close()
 
 
-def insert_api_key(db_path: str, *, workspace: str, role: str, label: str, token: str) -> None:
+def insert_api_key(
+    db_path: str, *, workspace: str, role: str, label: str, token: str
+) -> None:
     conn = _connect(db_path)
     try:
         create_workspace(conn, workspace, name=workspace, root=None)

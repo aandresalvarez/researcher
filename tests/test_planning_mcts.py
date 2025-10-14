@@ -22,4 +22,3 @@ def test_planning_mcts_event():
     _ = agent.answer(params=params, emit=emit)
     kinds = [k for (k, _) in events]
     assert "planning" in kinds
-

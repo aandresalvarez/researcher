@@ -27,7 +27,9 @@ def extract_pdf_tables(path: Path) -> List[str]:
                 lines: List[str] = []
                 for row in t:
                     try:
-                        cells = [c.strip() if isinstance(c, str) else "" for c in (row or [])]
+                        cells = [
+                            c.strip() if isinstance(c, str) else "" for c in (row or [])
+                        ]
                         lines.append(" | ".join(cells))
                     except Exception:
                         continue
@@ -39,4 +41,3 @@ def extract_pdf_tables(path: Path) -> List[str]:
 
 
 __all__ = ["extract_pdf_tables"]
-

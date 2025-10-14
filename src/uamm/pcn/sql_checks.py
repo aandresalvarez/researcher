@@ -17,7 +17,9 @@ def _column_values(rows: Iterable[Dict[str, Any]], col: str) -> List[Any]:
     return out
 
 
-def evaluate_checks(rows: List[Dict[str, Any]], checks: Dict[str, Dict[str, Any]]) -> List[str]:
+def evaluate_checks(
+    rows: List[Dict[str, Any]], checks: Dict[str, Dict[str, Any]]
+) -> List[str]:
     """Evaluate simple column checks on a list of row dicts.
 
     checks: { column: { 'non_negative': bool, 'min': num, 'max': num, 'monotonic': 'increasing'|'decreasing'|'nondecreasing'|'nonincreasing' } }

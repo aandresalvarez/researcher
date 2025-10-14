@@ -363,7 +363,9 @@ class MainAgent:
         # Tool allowlist (optional): when provided, only names in this set may execute
         raw_allowed = params.get("tools_allowed")
         allowed_tools: Optional[set[str]] = (
-            set(map(str, raw_allowed)) if isinstance(raw_allowed, (list, tuple, set)) else None
+            set(map(str, raw_allowed))
+            if isinstance(raw_allowed, (list, tuple, set))
+            else None
         )
 
         def _tool_allowed(name: str) -> bool:
@@ -372,7 +374,9 @@ class MainAgent:
         # Guardrails config
         guard_enabled = bool(params.get("guardrails_enabled", False))
         guard_conf_path = params.get("guardrails_config_path")
-        guard_cfg = GuardrailsConfig.load(str(guard_conf_path) if guard_conf_path else None)
+        guard_cfg = GuardrailsConfig.load(
+            str(guard_conf_path) if guard_conf_path else None
+        )
 
         # Initial grounded answer using retrieved evidence
         if guard_enabled:
@@ -470,9 +474,17 @@ class MainAgent:
         planning_budget = int(params.get("planning_budget", 0) or 0)
         planning_mode = str(params.get("planning_mode", "tot") or "tot")
         planning_when = str(params.get("planning_when", "borderline") or "borderline")
-        borderline = (self._cfg.tau_accept - self._cfg.delta) <= S < self._cfg.tau_accept
-        if planning_enabled and planning_budget > 0 and (
-            planning_when == "always" or borderline or (planning_when == "iterate" and action == "iterate")
+        borderline = (
+            (self._cfg.tau_accept - self._cfg.delta) <= S < self._cfg.tau_accept
+        )
+        if (
+            planning_enabled
+            and planning_budget > 0
+            and (
+                planning_when == "always"
+                or borderline
+                or (planning_when == "iterate" and action == "iterate")
+            )
         ):
             try:
                 plan_out = plan_best_answer(
@@ -513,7 +525,10 @@ class MainAgent:
                 needs_fix = bool(best.get("needs_fix", needs_fix) or needs_fix)
                 S = float(best.get("S", S) or S)
                 cp_ok = self._cp.accept(S)
-                if not cp_ok and getattr(self._cp, "last_reason", None) == "missing_tau":
+                if (
+                    not cp_ok
+                    and getattr(self._cp, "last_reason", None) == "missing_tau"
+                ):
                     if "cp_missing_calibration" not in issues:
                         issues = list(issues) + ["cp_missing_calibration"]
                 action = decide(S, self._cfg, cp_ok)

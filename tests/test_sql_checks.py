@@ -29,13 +29,7 @@ def test_sql_checks_failures_reported(tmp_path, monkeypatch):
     pol_dir.mkdir()
     pack = {
         "table_allowed": ["demo"],
-        "table_policies": {
-            "demo": {
-                "checks": {
-                    "id": {"min": 2}
-                }
-            }
-        },
+        "table_policies": {"demo": {"checks": {"id": {"min": 2}}}},
     }
     pol_file = pol_dir / "checks.yaml"
     pol_file.write_text(__import__("yaml").safe_dump(pack), encoding="utf-8")
@@ -50,9 +44,25 @@ def test_sql_checks_failures_reported(tmp_path, monkeypatch):
 
     def fake_lookup_key(db_path: str, token: str):
         if token == admin_key:
-            return APIKeyRecord(id="1", workspace="ws1", key_hash="h1", role="admin", label="a", active=True, created=0.0)
+            return APIKeyRecord(
+                id="1",
+                workspace="ws1",
+                key_hash="h1",
+                role="admin",
+                label="a",
+                active=True,
+                created=0.0,
+            )
         if token == editor_key:
-            return APIKeyRecord(id="2", workspace="ws1", key_hash="h2", role="editor", label="e", active=True, created=0.0)
+            return APIKeyRecord(
+                id="2",
+                workspace="ws1",
+                key_hash="h2",
+                role="editor",
+                label="e",
+                active=True,
+                created=0.0,
+            )
         return None
 
     monkeypatch.setattr("uamm.security.auth.lookup_key", fake_lookup_key)

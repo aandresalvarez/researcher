@@ -64,11 +64,17 @@ def run_evals(
         # Tool counts from final trace
         try:
             trace = list(res.get("trace", []) or [])
-            tools = int((trace[-1] or {}).get("tools_used") and len(trace[-1]["tools_used"]) or 0)
+            tools = int(
+                (trace[-1] or {}).get("tools_used")
+                and len(trace[-1]["tools_used"])
+                or 0
+            )
         except Exception:
             tools = 0
         # Planning improvement flag
-        planning_events = [d for (e, d) in events if e == "planning" and isinstance(d, dict)]
+        planning_events = [
+            d for (e, d) in events if e == "planning" and isinstance(d, dict)
+        ]
         planning_improved = any(bool(d.get("improved")) for d in planning_events)
         # Tokens/cost estimates
         usage = res.get("usage", {}) or {}
@@ -90,7 +96,9 @@ def run_evals(
             cost_est = None
         # Faithfulness score for the final answer (optional)
         try:
-            f = compute_faithfulness(res.get("final", ""), res.get("pack_used", []) or [])
+            f = compute_faithfulness(
+                res.get("final", ""), res.get("pack_used", []) or []
+            )
             faith = f.get("score")
         except Exception:
             faith = None

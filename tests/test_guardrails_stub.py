@@ -16,5 +16,6 @@ def test_guardrails_adds_issue_and_event():
     }
     res = agent.answer(params=params, emit=emit)
     issues = res.get("trace", [{}])[-1].get("issues", [])
-    assert any("policy_violation" in i or "unsupported" in i for i in issues) or any(e for e in events if e[0] == "guardrails")
-
+    assert any("policy_violation" in i or "unsupported" in i for i in issues) or any(
+        e for e in events if e[0] == "guardrails"
+    )

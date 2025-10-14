@@ -14,4 +14,3 @@ def test_eval_metrics_include_tokens_cost(monkeypatch, tmp_path):
     # We expect keys present; values may be None depending on agent fallback
     assert "avg_tokens" in metrics
     assert "total_cost" in metrics
-

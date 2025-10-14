@@ -57,7 +57,9 @@ def _adjacency(edges: List[Dict[str, Any]]) -> Dict[str, List[str]]:
     return adj
 
 
-def _max_depth(nodes: Dict[str, Dict[str, Any]], edges: List[Dict[str, Any]], dag_ok: bool) -> int:
+def _max_depth(
+    nodes: Dict[str, Dict[str, Any]], edges: List[Dict[str, Any]], dag_ok: bool
+) -> int:
     if not dag_ok:
         return -1
     adj = _adjacency(edges)
@@ -120,17 +122,26 @@ def evaluate_assertions(
         if pred == "no_cycles":
             passed = bool(dag_ok)
         elif pred == "no_pcn_failures":
-            passed = not any(isinstance(f, str) and f.startswith("pcn_failure:") for f in dag_failures)
+            passed = not any(
+                isinstance(f, str) and f.startswith("pcn_failure:")
+                for f in dag_failures
+            )
         elif pred == "no_dependency_failures":
-            passed = not any(isinstance(f, str) and f.startswith("dependency_failure:") for f in dag_failures)
+            passed = not any(
+                isinstance(f, str) and f.startswith("dependency_failure:")
+                for f in dag_failures
+            )
         elif pred == "all_claims_supported":
-            passed = not any(isinstance(f, str) and f.startswith("unsupported_claim:") for f in (v_fails or []))
+            passed = not any(
+                isinstance(f, str) and f.startswith("unsupported_claim:")
+                for f in (v_fails or [])
+            )
         elif pred == "max_depth":
             try:
                 max_allowed = int(a.get("value"))
                 depth = _max_depth(nodes, edges, dag_ok)
                 details["depth"] = depth
-                passed = (depth >= 0 and depth <= max_allowed)
+                passed = depth >= 0 and depth <= max_allowed
             except Exception:
                 passed = True
         elif pred == "path_exists":
@@ -143,7 +154,13 @@ def evaluate_assertions(
             disallowed = [t for t in seen_types if t and t not in allowed]
             details["disallowed"] = disallowed
             passed = len(disallowed) == 0
-        out.append({"predicate": pred, "passed": bool(passed), **({"details": details} if details else {})})
+        out.append(
+            {
+                "predicate": pred,
+                "passed": bool(passed),
+                **({"details": details} if details else {}),
+            }
+        )
         pred_m = pred_metrics.setdefault(pred, {"runs": 0, "fail": 0})
         pred_m["runs"] = int(pred_m.get("runs", 0)) + 1
         if not passed:

@@ -35,17 +35,36 @@ def test_api_key_roles_allow_and_forbid(tmp_path, monkeypatch):
     def fake_lookup_key(db_path: str, token: str):
         if token == viewer_key:
             return APIKeyRecord(
-                id="1", workspace="wsA", key_hash="h1", role="viewer", label="viewA", active=True, created=0.0
+                id="1",
+                workspace="wsA",
+                key_hash="h1",
+                role="viewer",
+                label="viewA",
+                active=True,
+                created=0.0,
             )
         if token == editor_key:
             return APIKeyRecord(
-                id="2", workspace="wsA", key_hash="h2", role="editor", label="editA", active=True, created=0.0
+                id="2",
+                workspace="wsA",
+                key_hash="h2",
+                role="editor",
+                label="editA",
+                active=True,
+                created=0.0,
             )
         if token == other_key:
             return APIKeyRecord(
-                id="3", workspace="wsB", key_hash="h3", role="editor", label="editB", active=True, created=0.0
+                id="3",
+                workspace="wsB",
+                key_hash="h3",
+                role="editor",
+                label="editB",
+                active=True,
+                created=0.0,
             )
         return None
+
     monkeypatch.setattr("uamm.security.auth.lookup_key", fake_lookup_key)
 
     with TestClient(app) as client:
@@ -66,7 +85,9 @@ def test_api_key_roles_allow_and_forbid(tmp_path, monkeypatch):
         assert r2.status_code == 200
 
         s1 = client.get(
-            "/memory/search", headers={"Authorization": f"Bearer {editor_key}"}, params={"q": "alpha"}
+            "/memory/search",
+            headers={"Authorization": f"Bearer {editor_key}"},
+            params={"q": "alpha"},
         )
         assert s1.status_code == 200
         assert s1.json()["hits"], "expected to find alpha in wsA"

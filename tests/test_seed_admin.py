@@ -25,21 +25,33 @@ def test_seed_admin_key_inserts_and_lists(tmp_path, monkeypatch):
 
     # Safety: if seeding failed due to environment nuance, fall back to fake lookup
     from uamm.security.auth import APIKeyRecord
+
     def fake_lookup_key(db_path: str, token: str):
         if token == "wk_seed_admin":
             return APIKeyRecord(
-                id="1", workspace="seedws", key_hash="h", role="admin", label="seed-admin", active=True, created=0.0
+                id="1",
+                workspace="seedws",
+                key_hash="h",
+                role="admin",
+                label="seed-admin",
+                active=True,
+                created=0.0,
             )
         return None
+
     monkeypatch.setattr("uamm.security.auth.lookup_key", fake_lookup_key)
 
     with TestClient(app) as client:
         # Admin can create and list workspaces using the seeded admin key
         rcreate = client.post(
-            "/workspaces", headers={"Authorization": "Bearer wk_seed_admin"}, json={"slug": "seedws", "name": "Seed Workspace"}
+            "/workspaces",
+            headers={"Authorization": "Bearer wk_seed_admin"},
+            json={"slug": "seedws", "name": "Seed Workspace"},
         )
         assert rcreate.status_code == 200
         r = client.get("/workspaces", headers={"Authorization": "Bearer wk_seed_admin"})
         assert r.status_code == 200
-        ws = client.get("/workspaces/seedws", headers={"Authorization": "Bearer wk_seed_admin"})
+        ws = client.get(
+            "/workspaces/seedws", headers={"Authorization": "Bearer wk_seed_admin"}
+        )
         assert ws.status_code == 200

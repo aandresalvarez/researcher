@@ -131,7 +131,7 @@ Workspaces & Auth
   - Create workspace with filesystem root: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py create my-team --root data/workspaces/my-team`
   - Issue key: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py issue my-team editor editor-key`
   - List keys: `PYTHONPATH=src .venv/bin/python scripts/workspace_keys.py list-keys my-team`
-  
+
 Per-folder workspaces (multi-root)
 - Each workspace can have its own root folder containing its DB and docs:
   - DB: `<root>/uamm.sqlite`

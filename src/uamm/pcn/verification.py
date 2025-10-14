@@ -86,7 +86,9 @@ class PCNVerifier:
                     f"value {value} differs from expected {expected} (tol={tolerance})"
                 )
             # Optional unit validation
-            units = entry.policy.get("units") if isinstance(entry.policy, dict) else None
+            units = (
+                entry.policy.get("units") if isinstance(entry.policy, dict) else None
+            )
             if units:
                 if not validate_numeric_unit(value, str(units)):
                     raise VerificationError(f"invalid_units:{units}")
@@ -103,7 +105,9 @@ class PCNVerifier:
         try:
             numeric = float(value)
             # Optional unit validation
-            units = entry.policy.get("units") if isinstance(entry.policy, dict) else None
+            units = (
+                entry.policy.get("units") if isinstance(entry.policy, dict) else None
+            )
             if units:
                 if not validate_numeric_unit(numeric, str(units)):
                     raise VerificationError(f"invalid_units:{units}")

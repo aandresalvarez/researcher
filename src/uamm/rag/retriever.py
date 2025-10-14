@@ -229,10 +229,23 @@ def retrieve(
         # Table boost when question hints at tabular reasoning and doc marked as table
         tbl_boost = 0.0
         try:
-            meta = candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+            meta = (
+                candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+            )
             is_table = bool(meta.get("table"))
             if is_table:
-                if any(term in query.lower() for term in ["table", "sql", "count", "cohort", "row", "column", "chart"]):
+                if any(
+                    term in query.lower()
+                    for term in [
+                        "table",
+                        "sql",
+                        "count",
+                        "cohort",
+                        "row",
+                        "column",
+                        "chart",
+                    ]
+                ):
                     tbl_boost = float(cfg.table_boost or 0.0)
         except Exception:
             tbl_boost = 0.0

@@ -37,7 +37,9 @@ def _mcp_count(tool: str, ok: bool) -> None:
         pass
 
 
-def _maybe_require_approval(tool_name: str, meta: Dict[str, Any], settings) -> Optional[Dict[str, Any]]:
+def _maybe_require_approval(
+    tool_name: str, meta: Dict[str, Any], settings
+) -> Optional[Dict[str, Any]]:
     required = set(getattr(settings, "tools_requiring_approval", []) or [])
     if tool_name in required:
         appr_id = str(uuid4())
@@ -73,7 +75,9 @@ def tool_web_fetch(url: str, *, settings=None) -> Dict[str, Any]:
         block_private_ip=getattr(settings, "egress_block_private_ip", True),
         enforce_tls=getattr(settings, "egress_enforce_tls", True),
         allow_redirects=getattr(settings, "egress_allow_redirects", 3),
-        max_payload_bytes=getattr(settings, "egress_max_payload_bytes", 5 * 1024 * 1024),
+        max_payload_bytes=getattr(
+            settings, "egress_max_payload_bytes", 5 * 1024 * 1024
+        ),
         allowlist_hosts=getattr(settings, "egress_allowlist_hosts", []),
         denylist_hosts=getattr(settings, "egress_denylist_hosts", []),
     )
@@ -100,7 +104,9 @@ def tool_math_eval(expr: str, *, settings=None) -> Dict[str, Any]:
     return {"status": "ok", "value": value}
 
 
-def tool_table_query(db_path: str, sql: str, params: Optional[List[Any]] = None, *, settings=None) -> Dict[str, Any]:
+def tool_table_query(
+    db_path: str, sql: str, params: Optional[List[Any]] = None, *, settings=None
+) -> Dict[str, Any]:
     settings = settings or load_settings()
     res = _maybe_require_approval("TABLE_QUERY", {"sql": sql}, settings)
     if res:
@@ -108,7 +114,9 @@ def tool_table_query(db_path: str, sql: str, params: Optional[List[Any]] = None,
     max_rows = int(getattr(settings, "table_query_max_rows", 25) or 25)
     time_limit_ms = int(getattr(settings, "table_query_time_limit_ms", 250) or 250)
     try:
-        rows = _table_query(db_path, sql, params or [], max_rows=max_rows, time_limit_ms=time_limit_ms)
+        rows = _table_query(
+            db_path, sql, params or [], max_rows=max_rows, time_limit_ms=time_limit_ms
+        )
         _mcp_count("TABLE_QUERY", ok=True)
     except Exception:
         _mcp_count("TABLE_QUERY", ok=False)
@@ -119,12 +127,17 @@ def tool_table_query(db_path: str, sql: str, params: Optional[List[Any]] = None,
 def uamm_answer(question: str, *, settings=None, **kwargs: Any) -> Dict[str, Any]:
     """Simple MCP-callable answer function mirroring /agent/answer behavior (non-stream)."""
     settings = settings or load_settings()
-    policy = PolicyConfig(tau_accept=getattr(settings, "accept_threshold", 0.85), delta=getattr(settings, "borderline_delta", 0.05))
+    policy = PolicyConfig(
+        tau_accept=getattr(settings, "accept_threshold", 0.85),
+        delta=getattr(settings, "borderline_delta", 0.05),
+    )
     agent = MainAgent(cp_enabled=getattr(settings, "cp_enabled", False), policy=policy)
     params = {
         "question": question,
         "max_refinements": getattr(settings, "max_refinement_steps", 1),
-        "tool_budget_per_refinement": getattr(settings, "tool_budget_per_refinement", 2),
+        "tool_budget_per_refinement": getattr(
+            settings, "tool_budget_per_refinement", 2
+        ),
         "tool_budget_per_turn": getattr(settings, "tool_budget_per_turn", 4),
         "snne_samples": getattr(settings, "snne_samples", 5),
         "snne_tau": getattr(settings, "snne_tau", 0.3),
@@ -155,8 +168,12 @@ def get_tool_adapters(*, settings=None) -> Dict[str, Any]:
         "WEB_SEARCH": lambda q, k=3: tool_web_search(q, k=k, settings=settings),
         "WEB_FETCH": lambda url: tool_web_fetch(url, settings=settings),
         "MATH_EVAL": lambda expr: tool_math_eval(expr, settings=settings),
-        "TABLE_QUERY": lambda db_path, sql, params=None: tool_table_query(db_path, sql, params or [], settings=settings),
-        "UAMM_ANSWER": lambda question, **kw: uamm_answer(question, settings=settings, **kw),
+        "TABLE_QUERY": lambda db_path, sql, params=None: tool_table_query(
+            db_path, sql, params or [], settings=settings
+        ),
+        "UAMM_ANSWER": lambda question, **kw: uamm_answer(
+            question, settings=settings, **kw
+        ),
     }
 
 
@@ -168,7 +185,9 @@ def mcp_metrics_snapshot() -> Dict[str, Any]:
     }
 
 
-def run(host: str | None = None, port: int | None = None) -> None:  # pragma: no cover - runtime only
+def run(
+    host: str | None = None, port: int | None = None
+) -> None:  # pragma: no cover - runtime only
     """Launch a Pydantic AI MCP server if available.
 
     The implementation defers import to avoid hard dependency at import time.

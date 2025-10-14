@@ -13,4 +13,3 @@ def test_memory_promotion_runs(tmp_path):
         add_memory(str(db), key="episodic:", text="The system cached answers.")
     stats = promote_episodic_to_semantic(str(db), min_support=3)
     assert stats.promoted >= 1
-

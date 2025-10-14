@@ -63,7 +63,10 @@ from uamm.rag.vector_store import LanceDBUnavailable, upsert_document_embedding
 from uamm.rag.ingest import scan_folder, make_chunks
 from uamm.gov.executor import evaluate_dag
 from uamm.gov.validator import validate_dag
-from uamm.policy.assertions import load_assertions as _load_assertions, evaluate_assertions as _eval_assertions
+from uamm.policy.assertions import (
+    load_assertions as _load_assertions,
+    evaluate_assertions as _eval_assertions,
+)
 from uamm.security.auth import (
     issue_api_key as ws_issue_key,
     list_keys as ws_list_keys,
@@ -231,8 +234,8 @@ def _prepare_trace_blob(
     events: list[tuple[str, Dict[str, Any]]],
     existing_pcn: Dict[str, Dict[str, Any]] | None = None,
 ) -> tuple[str, Dict[str, Dict[str, Any]], list[Dict[str, Any]], list[Dict[str, Any]]]:
-    pcn_map, tool_events, score_events, uq_events, gov_events, planning_events = _bucket_event_lists(
-        events, existing_pcn
+    pcn_map, tool_events, score_events, uq_events, gov_events, planning_events = (
+        _bucket_event_lists(events, existing_pcn)
     )
     full_trace = [t.model_dump(mode="json") for t in final.trace]
     pack_used = [p.model_dump(mode="json") for p in final.pack_used]
@@ -292,7 +295,9 @@ def _persist_trace_and_metrics(
     except Exception:
         gr_events = []
     if gr_events:
-        guard = metrics_state.setdefault("guardrails", {"pre": 0, "post": 0, "by_domain": {}})
+        guard = metrics_state.setdefault(
+            "guardrails", {"pre": 0, "post": 0, "by_domain": {}}
+        )
         by_dom = guard.setdefault("by_domain", {})
         dom = req.domain
         dom_counters = by_dom.setdefault(dom, {"pre": 0, "post": 0})
@@ -310,11 +315,17 @@ def _persist_trace_and_metrics(
         events_map = blob.get("events", {}) if isinstance(blob, dict) else {}
         p_events = events_map.get("planning", []) or []
         runs = len(p_events)
-        improvements = sum(1 for e in p_events if isinstance(e, dict) and e.get("improved"))
+        improvements = sum(
+            1 for e in p_events if isinstance(e, dict) and e.get("improved")
+        )
         if runs:
-            pstats = metrics_state.setdefault("planning", {"runs": 0, "improvements": 0})
+            pstats = metrics_state.setdefault(
+                "planning", {"runs": 0, "improvements": 0}
+            )
             pstats["runs"] = int(pstats.get("runs", 0)) + runs
-            pstats["improvements"] = int(pstats.get("improvements", 0)) + int(improvements)
+            pstats["improvements"] = int(pstats.get("improvements", 0)) + int(
+                improvements
+            )
         # Units checks from PCN map
         pcn_map = events_map.get("pcn", {}) or {}
         unit_runs = unit_fail = 0
@@ -322,7 +333,11 @@ def _persist_trace_and_metrics(
             for entry in pcn_map.values():
                 if not isinstance(entry, dict):
                     continue
-                pol = entry.get("policy") if isinstance(entry.get("policy"), dict) else None
+                pol = (
+                    entry.get("policy")
+                    if isinstance(entry.get("policy"), dict)
+                    else None
+                )
                 if pol and pol.get("units"):
                     unit_runs += 1
                     if str(entry.get("status", "")).lower() == "failed":
@@ -337,7 +352,12 @@ def _persist_trace_and_metrics(
     try:
         faith = compute_faithfulness(final.final, final.pack_used)
     except Exception:
-        faith = {"score": None, "claim_count": 0, "supported_count": 0, "unsupported_claims": []}
+        faith = {
+            "score": None,
+            "claim_count": 0,
+            "supported_count": 0,
+            "unsupported_claims": [],
+        }
     if isinstance(faith, dict):
         f_global = metrics_state.setdefault(
             "faithfulness",
@@ -361,7 +381,9 @@ def _persist_trace_and_metrics(
             f_dom["claim_count"] = int(f_dom.get("claim_count", 0)) + claim_count
         if unsupported:
             n_uns = len(unsupported)
-            f_global["unsupported_total"] = int(f_global.get("unsupported_total", 0)) + n_uns
+            f_global["unsupported_total"] = (
+                int(f_global.get("unsupported_total", 0)) + n_uns
+            )
             f_dom["unsupported_total"] = int(f_dom.get("unsupported_total", 0)) + n_uns
     if gov_events:
         metrics_state.setdefault("gov_events", []).extend(gov_events)
@@ -580,25 +602,45 @@ def answer(
         if row:
             # row["json"] is a str(dict), eval safely with ast.literal_eval
             import ast
+
             pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
             if isinstance(pack, dict):
                 if "accept_threshold" in pack:
                     settings.accept_threshold = float(pack["accept_threshold"])  # type: ignore[attr-defined]
-                if "borderline_delta" in pack and "borderline_delta" not in req.model_fields_set:
+                if (
+                    "borderline_delta" in pack
+                    and "borderline_delta" not in req.model_fields_set
+                ):
                     req.borderline_delta = float(pack["borderline_delta"])  # type: ignore[assignment]
                 if "tool_budget_per_refinement" in pack:
-                    setattr(settings, "tool_budget_per_refinement", int(pack["tool_budget_per_refinement"]))
+                    setattr(
+                        settings,
+                        "tool_budget_per_refinement",
+                        int(pack["tool_budget_per_refinement"]),
+                    )
                 if "tool_budget_per_turn" in pack:
-                    setattr(settings, "tool_budget_per_turn", int(pack["tool_budget_per_turn"]))
+                    setattr(
+                        settings,
+                        "tool_budget_per_turn",
+                        int(pack["tool_budget_per_turn"]),
+                    )
                 if "tools_requiring_approval" in pack:
-                    setattr(settings, "tools_requiring_approval", list(pack["tools_requiring_approval"]))
+                    setattr(
+                        settings,
+                        "tools_requiring_approval",
+                        list(pack["tools_requiring_approval"]),
+                    )
                 if "tools_allowed" in pack:
                     # Attach to request.state for downstream use
                     setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
                 if "rag_weight_sparse" in pack:
-                    setattr(settings, "rag_weight_sparse", float(pack["rag_weight_sparse"]))
+                    setattr(
+                        settings, "rag_weight_sparse", float(pack["rag_weight_sparse"])
+                    )
                 if "rag_weight_dense" in pack:
-                    setattr(settings, "rag_weight_dense", float(pack["rag_weight_dense"]))
+                    setattr(
+                        settings, "rag_weight_dense", float(pack["rag_weight_dense"])
+                    )
                 if "vector_backend" in pack:
                     setattr(settings, "vector_backend", str(pack["vector_backend"]))
                 if "lancedb_uri" in pack:
@@ -864,22 +906,42 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
         con.close()
         if row:
             import ast
+
             pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
             if isinstance(pack, dict):
                 if "accept_threshold" in pack:
                     settings.accept_threshold = float(pack["accept_threshold"])  # type: ignore[attr-defined]
-                if "borderline_delta" in pack and "borderline_delta" not in req.model_fields_set:
+                if (
+                    "borderline_delta" in pack
+                    and "borderline_delta" not in req.model_fields_set
+                ):
                     req.borderline_delta = float(pack["borderline_delta"])  # type: ignore[assignment]
                 if "tool_budget_per_refinement" in pack:
-                    setattr(settings, "tool_budget_per_refinement", int(pack["tool_budget_per_refinement"]))
+                    setattr(
+                        settings,
+                        "tool_budget_per_refinement",
+                        int(pack["tool_budget_per_refinement"]),
+                    )
                 if "tool_budget_per_turn" in pack:
-                    setattr(settings, "tool_budget_per_turn", int(pack["tool_budget_per_turn"]))
+                    setattr(
+                        settings,
+                        "tool_budget_per_turn",
+                        int(pack["tool_budget_per_turn"]),
+                    )
                 if "tools_requiring_approval" in pack:
-                    setattr(settings, "tools_requiring_approval", list(pack["tools_requiring_approval"]))
+                    setattr(
+                        settings,
+                        "tools_requiring_approval",
+                        list(pack["tools_requiring_approval"]),
+                    )
                 if "rag_weight_sparse" in pack:
-                    setattr(settings, "rag_weight_sparse", float(pack["rag_weight_sparse"]))
+                    setattr(
+                        settings, "rag_weight_sparse", float(pack["rag_weight_sparse"])
+                    )
                 if "rag_weight_dense" in pack:
-                    setattr(settings, "rag_weight_dense", float(pack["rag_weight_dense"]))
+                    setattr(
+                        settings, "rag_weight_dense", float(pack["rag_weight_dense"])
+                    )
                 if "vector_backend" in pack:
                     setattr(settings, "vector_backend", str(pack["vector_backend"]))
                 if "lancedb_uri" in pack:
@@ -1009,14 +1071,16 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
                 "faithfulness_enabled", getattr(settings, "faithfulness_enabled", True)
             )
             params.setdefault(
-                "faithfulness_threshold", getattr(settings, "faithfulness_threshold", 0.6)
+                "faithfulness_threshold",
+                getattr(settings, "faithfulness_threshold", 0.6),
             )
             # Faithfulness defaults
             params.setdefault(
                 "faithfulness_enabled", getattr(settings, "faithfulness_enabled", True)
             )
             params.setdefault(
-                "faithfulness_threshold", getattr(settings, "faithfulness_threshold", 0.6)
+                "faithfulness_threshold",
+                getattr(settings, "faithfulness_threshold", 0.6),
             )
             params.setdefault("cp_target_mis", req.cp_target_mis)
             # Use per-request resolved DB path when available
@@ -1033,7 +1097,9 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             )
             params.setdefault(
                 "lancedb_uri",
-                getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")),
+                getattr(
+                    request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")
+                ),
             )
             params.setdefault(
                 "lancedb_table", getattr(settings, "lancedb_table", "rag_vectors")
@@ -1330,7 +1396,11 @@ def memory_add(req: MemoryAddRequest, request: Request):
     _require_role(request, {"admin", "editor"})
     red_text, _ = redact(req.text)
     # Environment override for tests/dev takes precedence
-    eff_db = os.getenv("UAMM_DB_PATH") or getattr(request.state, "db_path", None) or settings.db_path
+    eff_db = (
+        os.getenv("UAMM_DB_PATH")
+        or getattr(request.state, "db_path", None)
+        or settings.db_path
+    )
     mid = db_add_memory(
         eff_db,
         key=req.key,
@@ -1364,7 +1434,11 @@ def rag_add(req: RagDocRequest, request: Request):
     ids: list[str] = []
     eff_db = getattr(request.state, "db_path", None) or settings.db_path
     for idx, segment in enumerate(chunks):
-        meta = {"title": req.title or "", "chunk_index": idx, "chunk_total": len(chunks)}
+        meta = {
+            "title": req.title or "",
+            "chunk_index": idx,
+            "chunk_total": len(chunks),
+        }
         if req.url:
             meta["url"] = req.url
         did = rag_add_doc(
@@ -1381,7 +1455,10 @@ def rag_add(req: RagDocRequest, request: Request):
             try:
                 # Override lancedb_uri per workspace without mutating global settings
                 from types import SimpleNamespace
-                ws_uri = getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", ""))
+
+                ws_uri = getattr(
+                    request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")
+                )
                 s_ovr = SimpleNamespace(
                     vector_backend=getattr(settings, "vector_backend", "none"),
                     lancedb_uri=ws_uri,
@@ -1415,9 +1492,13 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
     """
     settings = request.app.state.settings
     _require_role(request, {"admin", "editor"})
-    base = req.path or getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    base = req.path or getattr(
+        request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs")
+    )
     # Restrict to configured base directory for safety
-    configured = Path(getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    configured = Path(
+        getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    ).resolve()
     target = Path(base).resolve()
     if configured not in target.parents and configured != target:
         return JSONResponse(
@@ -1430,7 +1511,9 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
 
 
 @router.post("/rag/upload-file")
-async def rag_upload_file(request: Request, file: UploadFile = File(...), filename: str | None = None):
+async def rag_upload_file(
+    request: Request, file: UploadFile = File(...), filename: str | None = None
+):
     """Upload a single document and ingest into the current workspace.
 
     Requires editor/admin role when auth is enabled.
@@ -1438,7 +1521,9 @@ async def rag_upload_file(request: Request, file: UploadFile = File(...), filena
     _require_role(request, {"admin", "editor"})
     settings = request.app.state.settings
     ws = _resolve_workspace(request)
-    docs_root = Path(getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    docs_root = Path(
+        getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    ).resolve()
     target_dir = docs_root / ws
     target_dir.mkdir(parents=True, exist_ok=True)
     fn = filename or (file.filename or "upload.bin")
@@ -1458,7 +1543,9 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
     _require_role(request, {"admin", "editor"})
     settings = request.app.state.settings
     ws = _resolve_workspace(request)
-    docs_root = Path(getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    docs_root = Path(
+        getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    ).resolve()
     target_dir = docs_root / ws
     target_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
@@ -1712,7 +1799,12 @@ def workspace_list_members(slug: str, request: Request):
         con.close()
     return {
         "members": [
-            {"workspace": r["workspace"], "user_id": r["user_id"], "role": r["role"], "added": float(r["added"])}
+            {
+                "workspace": r["workspace"],
+                "user_id": r["user_id"],
+                "role": r["role"],
+                "added": float(r["added"]),
+            }
             for r in rows
         ]
     }
@@ -1748,17 +1840,33 @@ def audit_contributions(request: Request, user: str | None = None):
             where_user = " AND created_by = ?"
             params.append(user)
         mem = con.execute(
-            f"SELECT created_by, COUNT(*) as n, MAX(ts) as last_ts FROM memory WHERE workspace = ?{where_user} GROUP BY created_by"
-        , params).fetchall()
+            f"SELECT created_by, COUNT(*) as n, MAX(ts) as last_ts FROM memory WHERE workspace = ?{where_user} GROUP BY created_by",
+            params,
+        ).fetchall()
         cor = con.execute(
-            f"SELECT created_by, COUNT(*) as n, MAX(ts) as last_ts FROM corpus WHERE workspace = ?{where_user} GROUP BY created_by"
-        , params).fetchall()
+            f"SELECT created_by, COUNT(*) as n, MAX(ts) as last_ts FROM corpus WHERE workspace = ?{where_user} GROUP BY created_by",
+            params,
+        ).fetchall()
     finally:
         con.close()
     return {
         "workspace": ws,
-        "memory": [{"created_by": r["created_by"], "n": int(r["n"]), "last_ts": float(r["last_ts"]) if r["last_ts"] is not None else None} for r in mem],
-        "corpus": [{"created_by": r["created_by"], "n": int(r["n"]), "last_ts": float(r["last_ts"]) if r["last_ts"] is not None else None} for r in cor],
+        "memory": [
+            {
+                "created_by": r["created_by"],
+                "n": int(r["n"]),
+                "last_ts": float(r["last_ts"]) if r["last_ts"] is not None else None,
+            }
+            for r in mem
+        ],
+        "corpus": [
+            {
+                "created_by": r["created_by"],
+                "n": int(r["n"]),
+                "last_ts": float(r["last_ts"]) if r["last_ts"] is not None else None,
+            }
+            for r in cor
+        ],
     }
 
 
@@ -2447,14 +2555,22 @@ def metrics_prom(request: Request):
     lines.append(f"uamm_assertions_fail_total {int(govm.get('fail', 0) or 0)}")
     by_pred = govm.get("by_pred", {}) or {}
     if by_pred:
-        lines.append("# HELP uamm_assertions_by_pred_total GoV assertions runs by predicate")
+        lines.append(
+            "# HELP uamm_assertions_by_pred_total GoV assertions runs by predicate"
+        )
         lines.append("# TYPE uamm_assertions_by_pred_total counter")
         for pred, st in by_pred.items():
-            lines.append(f'uamm_assertions_by_pred_total{{predicate="{pred}"}} {int((st or {}).get("runs", 0) or 0)}')
-        lines.append("# HELP uamm_assertions_fail_by_pred_total GoV assertions failures by predicate")
+            lines.append(
+                f'uamm_assertions_by_pred_total{{predicate="{pred}"}} {int((st or {}).get("runs", 0) or 0)}'
+            )
+        lines.append(
+            "# HELP uamm_assertions_fail_by_pred_total GoV assertions failures by predicate"
+        )
         lines.append("# TYPE uamm_assertions_fail_by_pred_total counter")
         for pred, st in by_pred.items():
-            lines.append(f'uamm_assertions_fail_by_pred_total{{predicate="{pred}"}} {int((st or {}).get("fail", 0) or 0)}')
+            lines.append(
+                f'uamm_assertions_fail_by_pred_total{{predicate="{pred}"}} {int((st or {}).get("fail", 0) or 0)}'
+            )
     # Units checks
     units = m.get("units_checks", {}) or {}
     lines.append("# HELP uamm_units_checks_total Units checks runs")
@@ -2475,7 +2591,9 @@ def metrics_prom(request: Request):
     memory = m.get("memory", {}) or {}
     lines.append("# HELP uamm_memory_promotions_total Semantic memory promotions")
     lines.append("# TYPE uamm_memory_promotions_total counter")
-    lines.append(f"uamm_memory_promotions_total {int(memory.get('promotions', 0) or 0)}")
+    lines.append(
+        f"uamm_memory_promotions_total {int(memory.get('promotions', 0) or 0)}"
+    )
     # MCP metrics
     mcp = m.get("mcp", {}) or {}
     lines.append("# HELP uamm_mcp_requests_total MCP adapter requests")
@@ -2486,33 +2604,47 @@ def metrics_prom(request: Request):
     lines.append(f"uamm_mcp_errors_total {int(mcp.get('errors', 0) or 0)}")
     by_tool = mcp.get("by_tool", {}) or {}
     if by_tool:
-        lines.append("# HELP uamm_mcp_requests_by_tool_total MCP adapter requests by tool")
+        lines.append(
+            "# HELP uamm_mcp_requests_by_tool_total MCP adapter requests by tool"
+        )
         lines.append("# TYPE uamm_mcp_requests_by_tool_total counter")
         for tool, cnt in by_tool.items():
-            lines.append(f'uamm_mcp_requests_by_tool_total{{tool="{tool}"}} {int(cnt or 0)}')
+            lines.append(
+                f'uamm_mcp_requests_by_tool_total{{tool="{tool}"}} {int(cnt or 0)}'
+            )
     # Guardrails counters
     guard = m.get("guardrails", {}) or {}
     lines.append("# HELP uamm_guardrails_violations_pre_total Pre-guard violations")
     lines.append("# TYPE uamm_guardrails_violations_pre_total counter")
-    lines.append(f"uamm_guardrails_violations_pre_total {int(guard.get('pre', 0) or 0)}")
+    lines.append(
+        f"uamm_guardrails_violations_pre_total {int(guard.get('pre', 0) or 0)}"
+    )
     lines.append("# HELP uamm_guardrails_violations_post_total Post-guard violations")
     lines.append("# TYPE uamm_guardrails_violations_post_total counter")
-    lines.append(f"uamm_guardrails_violations_post_total {int(guard.get('post', 0) or 0)}")
+    lines.append(
+        f"uamm_guardrails_violations_post_total {int(guard.get('post', 0) or 0)}"
+    )
     # Planning counters
     planning = m.get("planning", {}) or {}
     lines.append("# HELP uamm_planning_runs_total Planning invocations observed")
     lines.append("# TYPE uamm_planning_runs_total counter")
     lines.append(f"uamm_planning_runs_total {int(planning.get('runs', 0) or 0)}")
-    lines.append("# HELP uamm_planning_improvements_total Planning rounds with improvement")
+    lines.append(
+        "# HELP uamm_planning_improvements_total Planning rounds with improvement"
+    )
     lines.append("# TYPE uamm_planning_improvements_total counter")
-    lines.append(f"uamm_planning_improvements_total {int(planning.get('improvements', 0) or 0)}")
+    lines.append(
+        f"uamm_planning_improvements_total {int(planning.get('improvements', 0) or 0)}"
+    )
     # Faithfulness (global)
     faith = m.get("faithfulness", {}) or {}
     f_count = int(faith.get("count", 0) or 0)
     f_sum = float(faith.get("sum", 0.0) or 0.0)
     f_claims = int(faith.get("claim_count", 0) or 0)
     f_unsupported = int(faith.get("unsupported_total", 0) or 0)
-    lines.append("# HELP uamm_faithfulness_score Average claim faithfulness score (0..1)")
+    lines.append(
+        "# HELP uamm_faithfulness_score Average claim faithfulness score (0..1)"
+    )
     lines.append("# TYPE uamm_faithfulness_score gauge")
     avg_f = (f_sum / f_count) if f_count > 0 else float("nan")
     lines.append(f"uamm_faithfulness_score {_prom_number(avg_f)}")
@@ -2542,13 +2674,17 @@ def metrics_prom(request: Request):
     guard = m.get("guardrails", {}) or {}
     gb = guard.get("by_domain", {}) or {}
     if gb:
-        lines.append("# HELP uamm_guardrails_violations_pre_by_domain_total Pre-guard violations by domain")
+        lines.append(
+            "# HELP uamm_guardrails_violations_pre_by_domain_total Pre-guard violations by domain"
+        )
         lines.append("# TYPE uamm_guardrails_violations_pre_by_domain_total counter")
         for dom, stats in gb.items():
             lines.append(
                 f'uamm_guardrails_violations_pre_by_domain_total{{domain="{dom}"}} {int((stats or {}).get("pre", 0) or 0)}'
             )
-        lines.append("# HELP uamm_guardrails_violations_post_by_domain_total Post-guard violations by domain")
+        lines.append(
+            "# HELP uamm_guardrails_violations_post_by_domain_total Post-guard violations by domain"
+        )
         lines.append("# TYPE uamm_guardrails_violations_post_by_domain_total counter")
         for dom, stats in gb.items():
             lines.append(
@@ -2557,7 +2693,9 @@ def metrics_prom(request: Request):
     # Faithfulness by domain
     fbd = m.get("faithfulness_by_domain", {}) or {}
     if fbd:
-        lines.append("# HELP uamm_faithfulness_score_by_domain Average claim faithfulness score by domain")
+        lines.append(
+            "# HELP uamm_faithfulness_score_by_domain Average claim faithfulness score by domain"
+        )
         lines.append("# TYPE uamm_faithfulness_score_by_domain gauge")
         for dom, stats in fbd.items():
             c = int((stats or {}).get("count", 0) or 0)
@@ -2566,7 +2704,9 @@ def metrics_prom(request: Request):
             lines.append(
                 f'uamm_faithfulness_score_by_domain{{domain="{dom}"}} {_prom_number(avg)}'
             )
-        lines.append("# HELP uamm_claims_by_domain_total Total extracted claims by domain")
+        lines.append(
+            "# HELP uamm_claims_by_domain_total Total extracted claims by domain"
+        )
         lines.append("# TYPE uamm_claims_by_domain_total counter")
         for dom, stats in fbd.items():
             cc = int((stats or {}).get("claim_count", 0) or 0)
@@ -2711,7 +2851,9 @@ def metrics_prom(request: Request):
             lines.append(
                 f'uamm_sql_checks_by_domain_total{{domain="{dom}"}} {int((st or {}).get("runs", 0) or 0)}'
             )
-        lines.append("# HELP uamm_sql_checks_fail_by_domain_total SQL checks failures by domain")
+        lines.append(
+            "# HELP uamm_sql_checks_fail_by_domain_total SQL checks failures by domain"
+        )
         lines.append("# TYPE uamm_sql_checks_fail_by_domain_total counter")
         for dom, st in sqlbd.items():
             lines.append(
@@ -2966,7 +3108,9 @@ def gov_check(req: GoVCheckRequest, request: Request):
     # Update global metrics for assertions
     try:
         metrics = request.app.state.metrics
-        govm = metrics.setdefault("gov_assertions", {"runs": 0, "fail": 0, "by_pred": {}})
+        govm = metrics.setdefault(
+            "gov_assertions", {"runs": 0, "fail": 0, "by_pred": {}}
+        )
         total_fails = sum(1 for a in assertions_out if not a.get("passed"))
         govm["runs"] = int(govm.get("runs", 0)) + 1
         if total_fails:
@@ -2980,7 +3124,12 @@ def gov_check(req: GoVCheckRequest, request: Request):
                 pred_m["fail"] = int(pred_m.get("fail", 0)) + 1
     except Exception:
         pass
-    return {"ok": ok, "failures": failures, "validation_ok": True, "assertions": assertions_out}
+    return {
+        "ok": ok,
+        "failures": failures,
+        "validation_ok": True,
+        "assertions": assertions_out,
+    }
 
 
 @router.get("/steps/recent")
@@ -3123,6 +3272,7 @@ def table_query(req: TableQueryRequest, request: Request):
     except Exception:
         pass
     import sqlite3 as _sqlite3  # ensure name for overlay
+
     # Apply workspace policy overlay for table guard resolution
     try:
         ws = _resolve_workspace(request)
@@ -3135,6 +3285,7 @@ def table_query(req: TableQueryRequest, request: Request):
         con.close()
         if row:
             import ast
+
             pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
             if isinstance(pack, dict):
                 if "table_allowed" in pack:
@@ -3142,7 +3293,9 @@ def table_query(req: TableQueryRequest, request: Request):
                 if "table_policies" in pack:
                     settings.table_policies = dict(pack["table_policies"])  # type: ignore[attr-defined]
                 if "table_allowed_by_domain" in pack:
-                    settings.table_allowed_by_domain = dict(pack["table_allowed_by_domain"])  # type: ignore[attr-defined]
+                    settings.table_allowed_by_domain = dict(
+                        pack["table_allowed_by_domain"]
+                    )  # type: ignore[attr-defined]
                 if "tools_allowed" in pack:
                     setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
     except Exception:
@@ -3268,7 +3421,14 @@ def table_query(req: TableQueryRequest, request: Request):
         dom_entry["runs"] = int(dom_entry.get("runs", 0)) + 1
         if violations:
             dom_entry["fail"] = int(dom_entry.get("fail", 0)) + 1
-    return {"rows": out, "checks": {"applied": checks_combined, "violations": violations, "ok": not bool(violations)}}
+    return {
+        "rows": out,
+        "checks": {
+            "applied": checks_combined,
+            "violations": violations,
+            "ok": not bool(violations),
+        },
+    }
 
 
 # Duplicate CP endpoints removed; see canonical definitions earlier in file
@@ -3276,13 +3436,18 @@ def _require_role(request: Request, allowed: set[str]) -> None:
     settings = request.app.state.settings
     # Only enforce when auth is required; endpoints can still call this opt-in
     import os
-    required = bool(getattr(settings, "auth_required", False)) or os.getenv("UAMM_AUTH_REQUIRED", "0") == "1"
+
+    required = (
+        bool(getattr(settings, "auth_required", False))
+        or os.getenv("UAMM_AUTH_REQUIRED", "0") == "1"
+    )
     if not required:
         return
     # Ensure we have a resolved role; resolve inline if middleware didn't run
     role = getattr(request.state, "role", None)
     if role is None:
         from uamm.security.auth import lookup_key, parse_bearer
+
         key = request.headers.get(getattr(settings, "api_key_header", "X-API-Key"))
         if not key:
             key = parse_bearer(request.headers.get("Authorization"))
@@ -3309,6 +3474,7 @@ def _check_rate_limit(request: Request) -> None:
         limiter = {}
         setattr(request.app.state, "rate_limiter", limiter)
     import time as _t
+
     role = getattr(request.state, "role", None)
     per_min = None
     if role == "viewer":
@@ -3338,6 +3504,7 @@ def _resolve_workspace(request: Request) -> str:
     if ws:
         return ws
     from uamm.security.auth import lookup_key, parse_bearer
+
     settings = request.app.state.settings
     key = request.headers.get(getattr(settings, "api_key_header", "X-API-Key"))
     if not key:
@@ -3352,6 +3519,8 @@ def _resolve_workspace(request: Request) -> str:
     ws = request.headers.get("X-Workspace", "default").strip() or "default"
     request.state.workspace = ws
     return ws
+
+
 # Settings management (ops)
 @router.get("/settings")
 def settings_get(request: Request):
@@ -3396,14 +3565,31 @@ class SettingsPatchRequest(BaseModel):
 def settings_patch(req: SettingsPatchRequest, request: Request):
     settings = request.app.state.settings
     allowed = {
-        "accept_threshold", "borderline_delta", "snne_samples", "snne_tau",
-        "max_refinement_steps", "cp_target_mis",
-        "rate_limit_enabled", "rate_limit_per_minute",
-        "docs_chunk_mode", "docs_chunk_chars", "docs_overlap_chars",
-        "docs_chunk_tokens", "docs_overlap_tokens", "docs_ocr_enabled",
-        "vector_backend", "lancedb_uri", "lancedb_table", "lancedb_metric", "lancedb_k",
-        "egress_block_private_ip", "egress_enforce_tls", "egress_allow_redirects",
-        "egress_max_payload_bytes", "egress_allowlist_hosts", "egress_denylist_hosts",
+        "accept_threshold",
+        "borderline_delta",
+        "snne_samples",
+        "snne_tau",
+        "max_refinement_steps",
+        "cp_target_mis",
+        "rate_limit_enabled",
+        "rate_limit_per_minute",
+        "docs_chunk_mode",
+        "docs_chunk_chars",
+        "docs_overlap_chars",
+        "docs_chunk_tokens",
+        "docs_overlap_tokens",
+        "docs_ocr_enabled",
+        "vector_backend",
+        "lancedb_uri",
+        "lancedb_table",
+        "lancedb_metric",
+        "lancedb_k",
+        "egress_block_private_ip",
+        "egress_enforce_tls",
+        "egress_allow_redirects",
+        "egress_max_payload_bytes",
+        "egress_allowlist_hosts",
+        "egress_denylist_hosts",
         "tools_requiring_approval",
     }
     applied: Dict[str, Any] = {}
@@ -3413,9 +3599,21 @@ def settings_patch(req: SettingsPatchRequest, request: Request):
         # Coerce types for known scalars
         if k in {"accept_threshold", "borderline_delta", "snne_tau", "cp_target_mis"}:
             v = float(v)
-        if k in {"snne_samples", "max_refinement_steps", "rate_limit_per_minute", "lancedb_k", "egress_allow_redirects", "egress_max_payload_bytes"}:
+        if k in {
+            "snne_samples",
+            "max_refinement_steps",
+            "rate_limit_per_minute",
+            "lancedb_k",
+            "egress_allow_redirects",
+            "egress_max_payload_bytes",
+        }:
             v = int(v)
-        if k in {"rate_limit_enabled", "docs_ocr_enabled", "egress_block_private_ip", "egress_enforce_tls"}:
+        if k in {
+            "rate_limit_enabled",
+            "docs_ocr_enabled",
+            "egress_block_private_ip",
+            "egress_enforce_tls",
+        }:
             v = bool(v)
         setattr(settings, k, v)
         applied[k] = getattr(settings, k)
@@ -3441,6 +3639,7 @@ def policies_export(request: Request):
     # Export current policy files as a zip
     from io import BytesIO
     import zipfile
+
     _require_role(request, {"admin"})
     buf = BytesIO()
     base = Path(os.getenv("UAMM_POLICIES_DIR", "config/policies")).resolve()
@@ -3458,6 +3657,7 @@ async def policies_import(request: Request, file: UploadFile = File(...)):
     # Import a zip of YAML policy files into the policies directory. Admin only.
     import zipfile
     from io import BytesIO
+
     _require_role(request, {"admin"})
     data = await file.read()
     if not data:
@@ -3494,6 +3694,7 @@ def policies_preview(slug: str, name: str, request: Request):
     if env_db:
         setattr(settings, "db_path", env_db)
     import ast
+
     new_pack = load_policy(name)
     if not new_pack:
         return JSONResponse(status_code=404, content={"error": "unknown_policy"})
@@ -3507,7 +3708,9 @@ def policies_preview(slug: str, name: str, request: Request):
     old_pack = {}
     if row and row["json"]:
         try:
-            old_pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
+            old_pack = (
+                ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
+            )
         except Exception:
             old_pack = {}
     keys = set(list(old_pack.keys()) + list(new_pack.keys()))
@@ -3537,6 +3740,7 @@ def policies_apply(slug: str, req: ApplyPolicyRequest, request: Request):
     con = sqlite3.connect(settings.db_path)
     try:
         import time as _t
+
         con.execute(
             "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
             (slug, req.name, str(pack), _t.time()),
@@ -3571,6 +3775,8 @@ def policies_current(slug: str, request: Request):
         "policy": row["json"],
         "updated": float(row["updated"]) if row["updated"] is not None else None,
     }
+
+
 @router.get("/config/export")
 def config_export(request: Request):
     settings = request.app.state.settings
@@ -3598,7 +3804,9 @@ def config_export(request: Request):
 
 
 @router.get("/config/bundle")
-def config_bundle(request: Request, include_db: bool = False, workspaces: str | None = None):
+def config_bundle(
+    request: Request, include_db: bool = False, workspaces: str | None = None
+):
     """Export a full environment bundle (zip) with settings.json, workspace_policies.json, and optional SQLite DB.
 
     Use include_db=true cautiously; it contains all workspace data.
@@ -3609,7 +3817,10 @@ def config_bundle(request: Request, include_db: bool = False, workspaces: str | 
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
         # settings.json
         import json as _json
-        z.writestr("settings.json", _json.dumps(settings_get(request)["settings"], indent=2))
+
+        z.writestr(
+            "settings.json", _json.dumps(settings_get(request)["settings"], indent=2)
+        )
         # workspace_policies.json
         con = sqlite3.connect(settings.db_path)
         con.row_factory = sqlite3.Row
@@ -3644,7 +3855,12 @@ def config_bundle(request: Request, include_db: bool = False, workspaces: str | 
 
 
 @router.get("/workspaces/{slug}/export")
-def workspace_export(slug: str, request: Request, since_ts: float | None = None, until_ts: float | None = None):
+def workspace_export(
+    slug: str,
+    request: Request,
+    since_ts: float | None = None,
+    until_ts: float | None = None,
+):
     """Export a workspace bundle (zip) with memory/corpus/steps JSON and applied policy.
 
     Intended for migrating content between environments.
@@ -3654,6 +3870,7 @@ def workspace_export(slug: str, request: Request, since_ts: float | None = None,
     buf = BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
         import json as _json
+
         con = sqlite3.connect(settings.db_path)
         con.row_factory = sqlite3.Row
         # Pull rows
@@ -3712,7 +3929,14 @@ def workspace_export(slug: str, request: Request, since_ts: float | None = None,
         ).fetchone()
         con.close()
         if pol:
-            pol_bytes = _json.dumps({"name": pol["policy_name"], "policy": pol["json"], "updated": pol["updated"]}, indent=2).encode("utf-8")
+            pol_bytes = _json.dumps(
+                {
+                    "name": pol["policy_name"],
+                    "policy": pol["json"],
+                    "updated": pol["updated"],
+                },
+                indent=2,
+            ).encode("utf-8")
             z.writestr("policy.json", pol_bytes)
             files["policy.json"] = {
                 "sha256": hashlib.sha256(pol_bytes).hexdigest(),
@@ -3721,6 +3945,7 @@ def workspace_export(slug: str, request: Request, since_ts: float | None = None,
             }
         # Write manifest with optional HMAC
         import time as _t
+
         manifest = {
             "schema_version": "1.0",
             "type": "workspace_bundle",
@@ -3732,7 +3957,9 @@ def workspace_export(slug: str, request: Request, since_ts: float | None = None,
         if key:
             mcopy = dict(manifest)
             mcopy["hmac"] = None
-            serialized = _json.dumps(mcopy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            serialized = _json.dumps(
+                mcopy, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
             sig = hmac.new(key.encode("utf-8"), serialized, hashlib.sha256).hexdigest()
             manifest["hmac"] = sig
         z.writestr("manifest.json", _json.dumps(manifest, indent=2))
@@ -3742,7 +3969,9 @@ def workspace_export(slug: str, request: Request, since_ts: float | None = None,
 
 
 @router.post("/workspaces/{slug}/import")
-async def workspace_import(slug: str, request: Request, file: UploadFile = File(...), replace: bool = False):
+async def workspace_import(
+    slug: str, request: Request, file: UploadFile = File(...), replace: bool = False
+):
     """Import a workspace bundle (zip) with memory/corpus/steps/policy. Admin only.
 
     Records are merged; duplicate IDs are ignored.
@@ -3757,6 +3986,7 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid_zip"})
     import json as _json
+
     con = sqlite3.connect(settings.db_path)
     try:
         # Verify manifest if present
@@ -3768,17 +3998,26 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
             if key and "hmac" in manifest:
                 mcopy = dict(manifest)
                 sig = mcopy.pop("hmac", None)
-                serialized = _json.dumps(mcopy, sort_keys=True, separators=(",", ":")).encode("utf-8")
-                vsig = hmac.new(key.encode("utf-8"), serialized, hashlib.sha256).hexdigest()
+                serialized = _json.dumps(
+                    mcopy, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+                vsig = hmac.new(
+                    key.encode("utf-8"), serialized, hashlib.sha256
+                ).hexdigest()
                 if sig != vsig:
-                    return JSONResponse(status_code=400, content={"error": "invalid_signature"})
+                    return JSONResponse(
+                        status_code=400, content={"error": "invalid_signature"}
+                    )
             # Verify checksums
             for name in ["memory.json", "corpus.json", "steps.json", "policy.json"]:
                 if name in z.namelist() and name in files:
                     data_bytes = z.read(name)
                     csum = hashlib.sha256(data_bytes).hexdigest()
                     if csum != files[name].get("sha256"):
-                        return JSONResponse(status_code=400, content={"error": f"checksum_mismatch:{name}"})
+                        return JSONResponse(
+                            status_code=400,
+                            content={"error": f"checksum_mismatch:{name}"},
+                        )
         except KeyError:
             pass
         except Exception:
@@ -3797,7 +4036,17 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
                 con.execute(
                     "INSERT OR IGNORE INTO memory(id, ts, key, text, embedding, domain, recency, tokens, embedding_model, workspace, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        r.get("id"), r.get("ts"), r.get("key"), r.get("text"), None, r.get("domain"), r.get("recency"), r.get("tokens"), r.get("embedding_model"), slug, r.get("created_by", "import")
+                        r.get("id"),
+                        r.get("ts"),
+                        r.get("key"),
+                        r.get("text"),
+                        None,
+                        r.get("domain"),
+                        r.get("recency"),
+                        r.get("tokens"),
+                        r.get("embedding_model"),
+                        slug,
+                        r.get("created_by", "import"),
                     ),
                 )
         except Exception:
@@ -3809,7 +4058,14 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
                 con.execute(
                     "INSERT OR IGNORE INTO corpus(id, ts, title, url, text, meta, workspace, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        r.get("id"), r.get("ts"), r.get("title"), r.get("url"), r.get("text"), r.get("meta"), slug, r.get("created_by", "import")
+                        r.get("id"),
+                        r.get("ts"),
+                        r.get("title"),
+                        r.get("url"),
+                        r.get("text"),
+                        r.get("meta"),
+                        slug,
+                        r.get("created_by", "import"),
                     ),
                 )
         except Exception:
@@ -3821,7 +4077,32 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
                 con.execute(
                     "INSERT OR IGNORE INTO steps(id, ts, step, question, answer, domain, workspace, s1, s2, final_score, cp_accept, action, reason, is_refinement, status, latency_ms, usage, pack_ids, issues, tools_used, change_summary, trace_json, eval_id, dataset_case_id, is_gold, gold_correct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        r.get("id"), r.get("ts"), r.get("step", 0), r.get("question"), r.get("answer"), r.get("domain"), slug, r.get("s1"), r.get("s2"), r.get("final_score"), 1 if r.get("cp_accept") else 0, r.get("action"), r.get("reason"), 1 if r.get("is_refinement") else 0, r.get("status"), r.get("latency_ms", 0), str(r.get("usage")), str(r.get("pack_ids")), str(r.get("issues")), str(r.get("tools_used")), r.get("change_summary"), r.get("trace_json"), r.get("eval_id"), r.get("dataset_case_id"), r.get("is_gold"), r.get("gold_correct"),
+                        r.get("id"),
+                        r.get("ts"),
+                        r.get("step", 0),
+                        r.get("question"),
+                        r.get("answer"),
+                        r.get("domain"),
+                        slug,
+                        r.get("s1"),
+                        r.get("s2"),
+                        r.get("final_score"),
+                        1 if r.get("cp_accept") else 0,
+                        r.get("action"),
+                        r.get("reason"),
+                        1 if r.get("is_refinement") else 0,
+                        r.get("status"),
+                        r.get("latency_ms", 0),
+                        str(r.get("usage")),
+                        str(r.get("pack_ids")),
+                        str(r.get("issues")),
+                        str(r.get("tools_used")),
+                        r.get("change_summary"),
+                        r.get("trace_json"),
+                        r.get("eval_id"),
+                        r.get("dataset_case_id"),
+                        r.get("is_gold"),
+                        r.get("gold_correct"),
                     ),
                 )
         except Exception:
@@ -3831,7 +4112,12 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
             pol = _json.loads(z.read("policy.json").decode("utf-8"))
             con.execute(
                 "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
-                (slug, pol.get("name", "bundle"), pol.get("policy"), pol.get("updated")),
+                (
+                    slug,
+                    pol.get("name", "bundle"),
+                    pol.get("policy"),
+                    pol.get("updated"),
+                ),
             )
         except Exception:
             pass
@@ -3842,7 +4128,13 @@ async def workspace_import(slug: str, request: Request, file: UploadFile = File(
 
 
 @router.post("/workspaces/{slug}/vector/reindex")
-def vector_reindex(slug: str, request: Request, since_ts: float | None = None, until_ts: float | None = None, limit: int | None = None):
+def vector_reindex(
+    slug: str,
+    request: Request,
+    since_ts: float | None = None,
+    until_ts: float | None = None,
+    limit: int | None = None,
+):
     """Rebuild vector embeddings for corpus documents in a workspace (admin only).
 
     Only effective when vector_backend=lancedb. Returns counts of attempts and successes.
@@ -3853,6 +4145,7 @@ def vector_reindex(slug: str, request: Request, since_ts: float | None = None, u
     if backend != "lancedb":
         return {"workspace": slug, "ok": False, "reason": "vector_backend_not_lancedb"}
     import sqlite3 as _sqlite3
+
     con = _sqlite3.connect(settings.db_path)
     con.row_factory = _sqlite3.Row
     try:
@@ -3881,10 +4174,23 @@ def vector_reindex(slug: str, request: Request, since_ts: float | None = None, u
             upsert_document_embedding(settings, r["id"], text, meta=meta)
             upserted += 1
         except LanceDBUnavailable:
-            return {"workspace": slug, "ok": False, "reason": "lancedb_unavailable", "attempted": attempted, "upserted": upserted, "errors": errors}
+            return {
+                "workspace": slug,
+                "ok": False,
+                "reason": "lancedb_unavailable",
+                "attempted": attempted,
+                "upserted": upserted,
+                "errors": errors,
+            }
         except Exception:
             errors += 1
-    return {"workspace": slug, "ok": True, "attempted": attempted, "upserted": upserted, "errors": errors}
+    return {
+        "workspace": slug,
+        "ok": True,
+        "attempted": attempted,
+        "upserted": upserted,
+        "errors": errors,
+    }
 
 
 class ConfigImportRequest(BaseModel):
@@ -3907,6 +4213,7 @@ def config_import(req: ConfigImportRequest, request: Request):
         try:
             import time as _t
             import ast
+
             for item in req.workspace_policies:
                 ws = str(item.get("workspace", "")).strip()
                 if not ws:
@@ -3968,6 +4275,8 @@ async def config_import_yaml(request: Request, file: UploadFile = File(...)):
         return JSONResponse(status_code=400, content={"error": "invalid_yaml"})
     req = ConfigImportRequest(**payload)
     return config_import(req, request)
+
+
 @router.get("/rate_limits")
 def rate_limits_status(request: Request):
     settings = request.app.state.settings
