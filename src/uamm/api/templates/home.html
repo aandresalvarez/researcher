@@ -1,10 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<nav class="breadcrumb-wrap" aria-label="breadcrumb">
-  <ol class="breadcrumb mb-2">
-    <li class="breadcrumb-item active" aria-current="page">Home</li>
-  </ol>
-</nav>
+<div class="card mb-3">
+  <div class="card-body">
+    <h3 class="mb-1">Welcome to UAMM</h3>
+    <p id="home-hero-sub" class="text-muted mb-3">Choose a workspace to get started.</p>
+    <div class="d-flex gap-2 flex-wrap">
+      <a id="hero-open" class="btn btn-primary disabled" href="#" aria-disabled="true">Open Playground</a>
+      <a id="hero-docs" class="btn btn-outline-secondary disabled" href="#" aria-disabled="true">Manage Docs</a>
+      <a id="hero-steps" class="btn btn-outline-secondary disabled" href="#" aria-disabled="true">Recent Steps</a>
+      <a class="btn btn-outline-secondary" href="/ui/workspaces">Manage Workspaces</a>
+    </div>
+  </div>
+  </div>
 <div class="row">
   <div class="col-lg-3">
     <div class="card mb-3">
@@ -87,6 +94,22 @@ function hsSyncLabel(sliderId, labelId){
   document.getElementById(labelId).textContent = val;
 }
 
+function updateHero(){
+  try{
+    const ws = (window.uammCtx && window.uammCtx.ws) || 'default';
+    const sub = document.getElementById('home-hero-sub');
+    const open = document.getElementById('hero-open');
+    const docs = document.getElementById('hero-docs');
+    const steps = document.getElementById('hero-steps');
+    const hasWs = ws && ws !== 'default';
+    if (sub) sub.textContent = hasWs ? `Current workspace: ${ws}` : 'Choose a workspace to get started.';
+    const setBtn = (el, href, enable) => { if (!el) return; el.href = href; el.classList.toggle('disabled', !enable); el.setAttribute('aria-disabled', enable ? 'false' : 'true'); };
+    setBtn(open, '/ui?ws=' + encodeURIComponent(ws), true);
+    setBtn(docs, '/ui/rag?ws=' + encodeURIComponent(ws), true);
+    setBtn(steps, '/ui/obs?ws=' + encodeURIComponent(ws), true);
+  }catch(e){}
+}
+
 async function hsLoadWorkspaces(){
   const el = document.getElementById('hs-ws-list');
   el.innerHTML = '<div class="list-group-item text-muted small">Loading…</div>';
@@ -99,7 +122,7 @@ async function hsLoadWorkspaces(){
     el.innerHTML = ws.map(w => `<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" onclick="hsSelect('${w.slug}')">${escapeHtml(w.slug)}<span class="badge text-bg-light">${escapeHtml(w.name||'')}</span></button>`).join('');
   } catch(e){ el.innerHTML = '<div class="list-group-item text-danger small">Error</div>'; }
 }
-function hsSelect(slug){ window.uammCtx.ws = slug; localStorage.setItem('uamm.ws', slug); if (window.ctxLoadStats) window.ctxLoadStats(); showToast('Workspace set: ' + slug); }
+function hsSelect(slug){ window.uammCtx.ws = slug; localStorage.setItem('uamm.ws', slug); if (window.ctxLoadStats) window.ctxLoadStats(); updateHero(); showToast('Workspace set: ' + slug); }
 async function hsCreateTest(){
   const slug = 'test-' + Math.random().toString(36).slice(2,8);
   try{
@@ -137,7 +160,7 @@ async function hsApplyConfig(){
   } catch(e){ el.textContent = 'Error applying settings'; }
 }
 function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
-document.addEventListener('DOMContentLoaded', () => { hsLoadWorkspaces(); });
+document.addEventListener('DOMContentLoaded', () => { hsLoadWorkspaces(); updateHero(); });
 // Load global settings into sliders for clarity
 document.addEventListener('DOMContentLoaded', async () => {
   try{

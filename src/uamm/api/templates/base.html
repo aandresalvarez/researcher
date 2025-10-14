@@ -48,7 +48,7 @@
     <main class="container-fluid">
       <div class="row">
         <!-- Global left panel: workspace list -->
-        <aside class="col-12 col-md-3 col-lg-2 border-end bg-light" id="sidebar">
+        <aside class="col-12 col-md-3 col-lg-2 border-end bg-light {% if fullpage %}d-none{% endif %}" id="sidebar">
           <div class="p-2" style="position: sticky; top: 4rem;">
             <div class="d-flex align-items-center mb-2">
               <strong class="me-auto">Workspaces</strong>
@@ -66,12 +66,12 @@
         </aside>
 
         <!-- Main content area -->
-        <section class="col-12 col-md-9 col-lg-10">
+        <section class="{% if fullpage %}col-12{% else %}col-12 col-md-9 col-lg-10{% endif %}">
           <div class="d-flex align-items-center mt-2 mb-1">
-            <button class="btn btn-sm btn-outline-secondary me-2" onclick="toggleSidebarResponsive()" title="Toggle sidebar">☰ Sidebar</button>
+            {% if not fullpage %}<button class="btn btn-sm btn-outline-secondary me-2" onclick="toggleSidebarResponsive()" title="Toggle sidebar">☰ Sidebar</button>{% endif %}
             {% block breadcrumb %}{% endblock %}
           </div>
-          <div id="ctx-panel" class="alert alert-light border d-flex align-items-center gap-3 flex-wrap" role="alert" style="display:none;">
+          <div id="ctx-panel" class="alert alert-light border d-flex align-items-center gap-3 flex-wrap {% if fullpage %}d-none{% endif %}" role="alert" style="display:none;">
             <div><strong>Workspace</strong>: <span id="ctxp-ws">default</span></div>
             <div class="vr"></div>
             <div><strong>Docs</strong>: <span id="ctxp-docs">0</span></div>

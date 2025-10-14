@@ -33,7 +33,7 @@ def playground(request: Request) -> HTMLResponse:
 @router.get("/home", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse:
     """Home hub with workspace selector and quick actions."""
-    context = {"request": request}
+    context = {"request": request, "fullpage": True}
     return templates.TemplateResponse(request, "home.html", context)
 
 

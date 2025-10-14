@@ -8,9 +8,36 @@
 </nav>
 <div class="row">
   <div class="col-lg-5">
+    <!-- Session Settings (applies to this browser session) -->
     <div class="card mb-3">
       <div class="card-header d-flex align-items-center">
-        <span>Workspace Dashboard</span>
+        <span>Session Settings</span>
+      </div>
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label small">Current Workspace</label>
+            <input id="sess-ws" class="form-control" list="ws-dlist" placeholder="default">
+            <datalist id="ws-dlist"></datalist>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">API Key</label>
+            <input id="sess-key" type="password" class="form-control" placeholder="wk_…">
+          </div>
+          <div class="col-12 d-flex gap-2">
+            <button class="btn btn-outline-primary" onclick="wsSessionSave()">Save</button>
+            <button class="btn btn-outline-secondary" onclick="wsSessionClearKey()">Clear Key</button>
+            <button class="btn btn-outline-secondary ms-auto" onclick="wsLoadWorkspacesList()">Load Workspaces</button>
+          </div>
+        </div>
+        <div class="small text-muted mt-2">These settings apply only to this browser session.</div>
+      </div>
+    </div>
+
+    <!-- Selected Workspace Dashboard -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span>Selected Workspace — Dashboard</span>
         <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadWsDash()">Refresh</button>
       </div>
       <div class="card-body">
@@ -65,22 +92,24 @@
     </div>
   </div>
   <div class="col-lg-7">
+    <!-- All Workspaces (manage all) -->
     <div class="card mb-3">
       <div class="card-header d-flex align-items-center">
-        <span>Workspaces</span>
+        <span>All Workspaces</span>
         <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadWorkspaces()">Refresh</button>
       </div>
       <div class="card-body">
         <div class="table-responsive">
           <table class="table table-sm table-hover align-middle">
-            <thead><tr><th>Slug</th><th>Name</th><th>Root</th><th></th></tr></thead>
+            <thead><tr><th>Slug</th><th>Name</th><th>Root</th><th class="text-end">Actions</th></tr></thead>
             <tbody id="ws-body"><tr><td colspan="4" class="text-muted">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
     </div>
+    <!-- Selected Workspace: Keys -->
     <div class="card">
-      <div class="card-header">Keys for <span id="keys-ws">—</span></div>
+      <div class="card-header">Selected Workspace — Keys <span class="text-muted">(<span id="keys-ws">—</span>)</span></div>
       <div class="card-body">
         <form id="key-issue" onsubmit="issueKey(event)" class="row g-2 align-items-end">
           <div class="col-md-3"><input id="key-role" class="form-control" placeholder="role (admin|editor|viewer)" /></div>
@@ -94,8 +123,9 @@
       </div>
     </div>
 
+    <!-- Selected Workspace: Policies -->
     <div class="card mt-3">
-      <div class="card-header">Workspace Policy Overlay</div>
+      <div class="card-header">Selected Workspace — Policy Overlay</div>
       <div class="card-body">
         <div class="row g-2">
           <div class="col-md-3">
@@ -129,7 +159,7 @@
 
     <div class="card mt-3">
       <div class="card-header d-flex align-items-center">
-        <span>Policy Pack Diff & Apply</span>
+        <span>Selected Workspace — Policy Packs</span>
         <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadPolicyList()">Load Packs</button>
       </div>
       <div class="card-body">
@@ -214,6 +244,36 @@
 
 {% block scripts %}
 <script>
+// Session Settings helpers (page-local)
+function wsSessionPrefill(){
+  try{
+    const ws = (window.uammCtx && window.uammCtx.ws) || 'default';
+    const key = (window.uammCtx && window.uammCtx.key) || '';
+    const wsEl = document.getElementById('sess-ws'); if (wsEl) wsEl.value = ws;
+    const keyEl = document.getElementById('sess-key'); if (keyEl) keyEl.value = key;
+  }catch(e){}
+}
+function wsSessionSave(){
+  try{
+    const ws = (document.getElementById('sess-ws').value||'').trim() || 'default';
+    const key = (document.getElementById('sess-key').value||'').trim();
+    window.uammCtx = window.uammCtx || {};
+    window.uammCtx.ws = ws;
+    if (key !== '') window.uammCtx.key = key; else window.uammCtx.key = '';
+    try { localStorage.setItem('uamm.ws', ws); } catch(e){}
+    try { if (key==='') localStorage.removeItem('uamm.key'); else localStorage.setItem('uamm.key', key); } catch(e){}
+    if (window.ctxLoadStats) window.ctxLoadStats();
+    showToast('Session updated');
+    loadWsDash();
+  }catch(e){ showToast('Failed to save'); }
+}
+async function wsLoadWorkspacesList(){
+  const dl = document.getElementById('ws-dlist'); if (!dl) return;
+  dl.innerHTML = '';
+  try{ const res = await ctxFetch('/workspaces'); const data = await res.json(); if (!res.ok) throw new Error('failed'); dl.innerHTML = (data.workspaces||[]).map(w=>`<option value="${w.slug}">`).join(''); showToast('Loaded workspaces'); }catch(e){ showToast('Failed to load'); }
+}
+function wsSessionClearKey(){ try{ document.getElementById('sess-key').value=''; localStorage.removeItem('uamm.key'); if (window.uammCtx) window.uammCtx.key=''; showToast('Key cleared'); }catch(e){} }
+
 async function loadWorkspaces() {
   const body = document.getElementById('ws-body');
   body.innerHTML = '<tr><td colspan="4" class="text-muted">Loading…</td></tr>';
@@ -230,6 +290,7 @@ async function loadWorkspaces() {
         <td class="text-truncate" style="max-width:300px;">${escapeHtml(ws.root||'')}</td>
         <td class="text-end">
           <div class="btn-group btn-group-sm" role="group">
+            <button class="btn btn-outline-primary" onclick="setSessionWorkspace('${encodeURIComponent(ws.slug)}')">Use</button>
             <button class="btn btn-outline-secondary" onclick="loadKeys('${encodeURIComponent(ws.slug)}')">Keys</button>
             <button class="btn btn-outline-danger" onclick="confirmDelete('${encodeURIComponent(ws.slug)}')">Delete</button>
           </div>
@@ -465,11 +526,21 @@ function escapeHtml(s) {
   return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  loadWorkspaces();
-});
-</script>
-{% endblock %}
+function setSessionWorkspace(slugEnc){
+  try{
+    const ws = decodeURIComponent(slugEnc);
+    window.uammCtx = window.uammCtx || {};
+    window.uammCtx.ws = ws;
+    try{ localStorage.setItem('uamm.ws', ws); }catch(e){}
+    const inp = document.getElementById('sess-ws'); if (inp) inp.value = ws;
+    if (window.ctxLoadStats) window.ctxLoadStats();
+    loadWsDash();
+    showToast('Workspace set: ' + ws);
+  }catch(e){}
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadWorkspaces(); wsSessionPrefill(); loadWsDash(); });
+
 async function confirmDelete(slug){
   const ws = decodeURIComponent(slug);
   if (!confirm(`Delete workspace '${ws}'? This removes metadata; files are kept unless purge is enabled in code.`)) return;
@@ -481,3 +552,5 @@ async function confirmDelete(slug){
     loadWorkspaces();
   } catch(e){ showToast('Failed to delete'); }
 }
+</script>
+{% endblock %}
