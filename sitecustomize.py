@@ -30,4 +30,3 @@ warnings.filterwarnings(
     category=UserWarning,
     module=r"fastapi\._compat\.v1",
 )
-

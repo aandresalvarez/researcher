@@ -74,5 +74,3 @@ Acceptance (M6)
 - [x] CC-T1: Security — centralized `ctxFetch` for Authorization; masked key inputs; avoid logging raw keys.
 - [x] CC-T2: Types/lint — `make test` suite passes; formatting/linting clean per project tools.
 - [x] CC-T3: Docs — in-app UI guide at `/ui/docs` covering pages, concepts, workflows.
-
- 
