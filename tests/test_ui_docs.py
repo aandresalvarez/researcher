@@ -11,4 +11,3 @@ def test_ui_docs_renders():
         assert b"UAMM UI Guide" in res.content
         assert b"Core Concepts" in res.content
         assert b"Playground" in res.content
-

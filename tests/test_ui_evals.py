@@ -10,4 +10,3 @@ def test_ui_evals_renders():
         assert res.status_code == 200
         assert b"Run Suites" in res.content
         assert b"Ad-hoc Items" in res.content
-

@@ -11,4 +11,3 @@ def test_ui_rag_renders():
         assert b"Upload File" in res.content
         assert b"Ingest Folder" in res.content
         assert b"Search Corpus" in res.content
-

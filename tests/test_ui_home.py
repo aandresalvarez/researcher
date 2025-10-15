@@ -11,4 +11,3 @@ def test_ui_home_renders():
         assert b"Workspaces" in res.content
         assert b"Quick Start" in res.content
         assert b"Configuration" in res.content
-

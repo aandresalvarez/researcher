@@ -1,2 +1,1 @@
-from .router import router  # re-export router for app inclusion
-
+from .router import router as router  # explicit re-export for linting

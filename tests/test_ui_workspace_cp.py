@@ -18,4 +18,3 @@ def test_ui_cp_renders():
         res = client.get("/ui/cp")
         assert res.status_code == 200
         assert b"CP Threshold" in res.content
-

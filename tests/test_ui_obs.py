@@ -10,4 +10,3 @@ def test_ui_obs_renders():
         assert res.status_code == 200
         assert b"Metrics" in res.content
         assert b"Recent Steps" in res.content
-

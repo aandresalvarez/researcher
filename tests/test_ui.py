@@ -9,4 +9,3 @@ def test_ui_playground_renders():
         res = client.get("/ui")
         assert res.status_code == 200
         assert b"Agent Playground" in res.content
-

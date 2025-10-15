@@ -1739,7 +1739,11 @@ def workspace_stats(slug: str, request: Request):
     dbp = paths.get("db_path", settings.db_path)
     doc_root = paths.get("docs_dir", settings.docs_dir)
     out = {
-        "paths": {"db_path": dbp, "docs_dir": doc_root, "lancedb_uri": paths.get("lancedb_uri", "")},
+        "paths": {
+            "db_path": dbp,
+            "docs_dir": doc_root,
+            "lancedb_uri": paths.get("lancedb_uri", ""),
+        },
         "counts": {"steps": 0, "docs": 0},
         "last_step_ts": None,
         "last_step_id": None,
@@ -1757,7 +1761,9 @@ def workspace_stats(slug: str, request: Request):
             ).fetchone()
             if row:
                 out["counts"]["steps"] = int(row["c"] or 0)
-                out["last_step_ts"] = float(row["last"]) if row["last"] is not None else None
+                out["last_step_ts"] = (
+                    float(row["last"]) if row["last"] is not None else None
+                )
             row2 = con.execute(
                 "SELECT id FROM steps WHERE workspace = ? ORDER BY ts DESC LIMIT 1",
                 (slug,),
@@ -2255,7 +2261,7 @@ def evals_runs(request: Request, limit: int = 20):
     ).fetchall()
     con.close()
     out = [
-        {"run_id": r["run_id"], "ts": float(r["ts"]), "suites": int(r["suites"]) }
+        {"run_id": r["run_id"], "ts": float(r["ts"]), "suites": int(r["suites"])}
         for r in rows
     ]
     return {"runs": out}
@@ -4027,6 +4033,7 @@ def policies_overlay(slug: str, req: OverlayPolicyRequest, request: Request):
     if env_db:
         setattr(settings, "db_path", env_db)
     import time as _t
+
     con = sqlite3.connect(settings.db_path)
     try:
         con.execute(
@@ -4555,6 +4562,8 @@ def rate_limits_status(request: Request):
         "admin_per_minute": getattr(settings, "rate_limit_admin_per_minute", None),
     }
     return {"limits": limits, "windows": out}
+
+
 @router.get("/favicon.ico")
 def favicon_redirect():
     return RedirectResponse(url="/static/favicon.svg")
