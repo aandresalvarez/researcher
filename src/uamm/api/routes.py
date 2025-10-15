@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
+from starlette.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from io import BytesIO
 import zipfile
@@ -37,6 +38,7 @@ from uamm.evals.suites import (
     run_suite as run_eval_suite,
     summarize_by_domain as suite_summarize_by_domain,
     summarize_records as suite_summarize_records,
+    list_suites as eval_list_suites,
 )
 from uamm.evals.orchestrator import run_suites
 from uamm.evals.storage import store_eval_run, fetch_eval_run
@@ -79,6 +81,7 @@ from uamm.storage.workspaces import (
     ensure_allowed_root,
     normalize_root,
     ensure_workspace_fs,
+    resolve_paths as ws_resolve_paths,
 )
 from uamm.config.policy_packs import list_policies, load_policy
 
@@ -1721,6 +1724,189 @@ def workspace_get(slug: str, request: Request):
     return {"workspace": ws}
 
 
+@router.get("/workspaces/{slug}/stats")
+def workspace_stats(slug: str, request: Request):
+    """Return basic stats for a workspace: paths, counts, last activity.
+
+    Counts are resolved against the effective workspace DB. If the workspace uses
+    a shared DB, counts are filtered by workspace slug where applicable.
+    """
+    import sqlite3 as _sqlite3
+
+    settings = request.app.state.settings
+    # Resolve effective paths
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    dbp = paths.get("db_path", settings.db_path)
+    doc_root = paths.get("docs_dir", settings.docs_dir)
+    out = {
+        "paths": {
+            "db_path": dbp,
+            "docs_dir": doc_root,
+            "lancedb_uri": paths.get("lancedb_uri", ""),
+        },
+        "counts": {"steps": 0, "docs": 0},
+        "last_step_ts": None,
+        "last_step_id": None,
+        "doc_latest": None,
+    }
+    try:
+        con = _sqlite3.connect(dbp)
+        con.row_factory = _sqlite3.Row
+        # Steps
+        try:
+            # If shared DB, filter by workspace; otherwise table may omit workspace filter but it's harmless
+            row = con.execute(
+                "SELECT COUNT(*) as c, MAX(ts) as last FROM steps WHERE workspace = ?",
+                (slug,),
+            ).fetchone()
+            if row:
+                out["counts"]["steps"] = int(row["c"] or 0)
+                out["last_step_ts"] = (
+                    float(row["last"]) if row["last"] is not None else None
+                )
+            row2 = con.execute(
+                "SELECT id FROM steps WHERE workspace = ? ORDER BY ts DESC LIMIT 1",
+                (slug,),
+            ).fetchone()
+            if row2:
+                out["last_step_id"] = row2["id"]
+        except Exception:
+            pass
+        # Docs corpus
+        try:
+            row = con.execute(
+                "SELECT COUNT(*) as c FROM corpus WHERE workspace = ?",
+                (slug,),
+            ).fetchone()
+            if row:
+                out["counts"]["docs"] = int(row["c"] or 0)
+            rowd = con.execute(
+                "SELECT id, title, url, ts FROM corpus WHERE workspace = ? ORDER BY ts DESC LIMIT 1",
+                (slug,),
+            ).fetchone()
+            if rowd:
+                out["doc_latest"] = {
+                    "id": rowd["id"],
+                    "title": rowd["title"],
+                    "url": rowd["url"],
+                    "ts": float(rowd["ts"]) if rowd["ts"] is not None else None,
+                }
+        except Exception:
+            pass
+        con.close()
+    except Exception:
+        pass
+    return out
+
+
+class WorkspaceDeleteRequest(BaseModel):
+    purge: bool = False  # when true, attempt to remove filesystem root safely
+
+
+@router.post("/workspaces/{slug}/delete")
+def workspace_delete(slug: str, req: WorkspaceDeleteRequest, request: Request):
+    """Delete a workspace record (and optionally purge its filesystem root).
+
+    Purge only removes files under the recorded root when configured bases allow it.
+    The operation is guarded by admin role.
+    """
+    _require_role(request, {"admin"})
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+
+    settings = request.app.state.settings
+    # Fetch workspace to identify root before deleting
+    con = _sqlite3.connect(settings.db_path)
+    con.row_factory = _sqlite3.Row
+    ws = con.execute(
+        "SELECT root FROM workspaces WHERE slug = ?",
+        (slug,),
+    ).fetchone()
+    if not ws:
+        con.close()
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    root = ws["root"]
+    # Delete associated keys/members/policies first for referential hygiene
+    with con:
+        con.execute("DELETE FROM workspace_keys WHERE workspace = ?", (slug,))
+        con.execute("DELETE FROM workspace_members WHERE workspace = ?", (slug,))
+        con.execute("DELETE FROM workspace_policies WHERE workspace = ?", (slug,))
+        con.execute("DELETE FROM workspaces WHERE slug = ?", (slug,))
+    con.close()
+    removed = False
+    if req.purge and root:
+        try:
+            # Only purge when restriction allows the root under allowed bases
+            ensure_allowed_root(
+                normalize_root(root),
+                tuple(getattr(settings, "workspace_base_dirs", []) or []),
+                bool(getattr(settings, "workspace_restrict_to_bases", False)),
+            )
+            r = _Path(root).resolve()
+            # Only remove if within allowed bases; remove files best-effort (non-recursive heavy safety)
+            import shutil as _shutil
+
+            _shutil.rmtree(r, ignore_errors=True)
+            removed = True
+        except Exception:
+            removed = False
+    return {"ok": True, "purged": removed}
+
+
+@router.get("/workspaces/{slug}/trend")
+def workspace_trend(slug: str, request: Request, days: int = 7):
+    """Return simple doc/step counts per day for the last N days for a workspace.
+
+    Buckets by UTC day. Intended for tiny sparkline displays in the UI.
+    """
+    import time as _t
+    import sqlite3 as _sqlite3
+
+    settings = request.app.state.settings
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    dbp = paths.get("db_path", settings.db_path)
+    now_day = int(_t.time() // 86400)
+    days = max(1, min(30, int(days or 7)))
+    buckets = list(range(now_day - (days - 1), now_day + 1))
+    steps_counts = {d: 0 for d in buckets}
+    docs_counts = {d: 0 for d in buckets}
+    try:
+        con = _sqlite3.connect(dbp)
+        con.row_factory = _sqlite3.Row
+        # Steps per day
+        try:
+            rows = con.execute(
+                "SELECT CAST(ts/86400 AS INT) AS day, COUNT(*) AS c FROM steps WHERE workspace = ? GROUP BY day",
+                (slug,),
+            ).fetchall()
+            for r in rows:
+                d = int(r["day"]) if r["day"] is not None else None
+                if d in steps_counts:
+                    steps_counts[d] = int(r["c"] or 0)
+        except Exception:
+            pass
+        # Docs per day
+        try:
+            rows = con.execute(
+                "SELECT CAST(ts/86400 AS INT) AS day, COUNT(*) AS c FROM corpus WHERE workspace = ? GROUP BY day",
+                (slug,),
+            ).fetchall()
+            for r in rows:
+                d = int(r["day"]) if r["day"] is not None else None
+                if d in docs_counts:
+                    docs_counts[d] = int(r["c"] or 0)
+        except Exception:
+            pass
+        con.close()
+    except Exception:
+        pass
+    return {
+        "days": buckets,
+        "steps": [steps_counts[d] for d in buckets],
+        "docs": [docs_counts[d] for d in buckets],
+    }
+
+
 class IssueKeyRequest(BaseModel):
     role: str
     label: str
@@ -2032,6 +2218,53 @@ def evals_report(run_id: str, request: Request):
             },
         )
     return {"run_id": run_id, "suites": runs}
+
+
+@router.get("/evals/suites")
+def evals_suites(request: Request):
+    """List available eval suites and basic metadata for UI selection."""
+    suites = [
+        {
+            "id": s.id,
+            "label": s.label,
+            "description": s.description,
+            "category": s.category,
+            "cp_enabled": s.cp_enabled,
+            "use_cp_decision": s.use_cp_decision,
+            "max_refinements": s.max_refinements,
+            "tool_budget_per_refinement": s.tool_budget_per_refinement,
+            "tool_budget_per_turn": s.tool_budget_per_turn,
+            "tags": list(s.tags),
+        }
+        for s in eval_list_suites()
+    ]
+    return {"suites": suites}
+
+
+@router.get("/evals/runs")
+def evals_runs(request: Request, limit: int = 20):
+    """List recent eval run_ids with summary info."""
+    import sqlite3
+
+    settings = request.app.state.settings
+    con = sqlite3.connect(settings.db_path)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        """
+        SELECT run_id, MAX(ts) as ts, COUNT(*) as suites
+        FROM eval_runs
+        GROUP BY run_id
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (max(1, min(200, limit)),),
+    ).fetchall()
+    con.close()
+    out = [
+        {"run_id": r["run_id"], "ts": float(r["ts"]), "suites": int(r["suites"])}
+        for r in rows
+    ]
+    return {"runs": out}
 
 
 @router.post("/tuner/propose")
@@ -3782,6 +4015,37 @@ def policies_current(slug: str, request: Request):
     }
 
 
+class OverlayPolicyRequest(BaseModel):
+    overlay: Dict[str, Any]
+
+
+@router.post("/workspaces/{slug}/policies/overlay")
+def policies_overlay(slug: str, req: OverlayPolicyRequest, request: Request):
+    """Set a workspace-specific policy overlay (ad-hoc JSON).
+
+    Stores the overlay under policy_name='overlay' and applies as an override at runtime.
+    Admin role required when auth is enabled.
+    """
+    _require_role(request, {"admin"})
+    settings = request.app.state.settings
+    # Env override for DB path in tests/dev
+    env_db = os.getenv("UAMM_DB_PATH")
+    if env_db:
+        setattr(settings, "db_path", env_db)
+    import time as _t
+
+    con = sqlite3.connect(settings.db_path)
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
+            (slug, "overlay", str(dict(req.overlay or {})), _t.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"workspace": slug, "applied": "overlay", "overlay": dict(req.overlay or {})}
+
+
 @router.get("/config/export")
 def config_export(request: Request):
     settings = request.app.state.settings
@@ -4298,3 +4562,8 @@ def rate_limits_status(request: Request):
         "admin_per_minute": getattr(settings, "rate_limit_admin_per_minute", None),
     }
     return {"limits": limits, "windows": out}
+
+
+@router.get("/favicon.ico")
+def favicon_redirect():
+    return RedirectResponse(url="/static/favicon.svg")

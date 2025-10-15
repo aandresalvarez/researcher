@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumb-wrap" aria-label="breadcrumb">
+  <ol class="breadcrumb mb-2">
+    <li class="breadcrumb-item"><a href="/ui/home">Home</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Docs</li>
+  </ol>
+</nav>
+<div class="row">
+  <div class="col-lg-12">
+    <div class="card mb-3">
+      <div class="card-header">UAMM UI Guide</div>
+      <div class="card-body">
+        <p class="mb-2">This guide explains how to use the in-app UI to test, observe, and tune the Uncertainty‑Aware Agent with Modular Memory (UAMM). It covers each page, key concepts, and practical workflows.</p>
+        <ul class="mb-0">
+          <li><a href="#concepts">Core Concepts</a></li>
+          <li><a href="#playground">Playground</a></li>
+          <li><a href="#rag">RAG</a></li>
+          <li><a href="#obs">Steps & Metrics</a></li>
+          <li><a href="#workspaces">Workspaces</a></li>
+          <li><a href="#cp">CP Thresholds</a></li>
+          <li><a href="#evals">Evals & Tuning</a></li>
+          <li><a href="#flows">Typical Workflows</a></li>
+          <li><a href="#security">Security Tips</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="concepts" class="card mb-3">
+      <div class="card-header">Core Concepts</div>
+      <div class="card-body">
+        <ul>
+          <li><strong>Domain</strong>: label for calibration (affects SNNE normalization and CP τ). Example: <code>finance</code>, <code>default</code>.</li>
+          <li><strong>Scores</strong>: <code>S1</code> (SNNE uncertainty, lower is better after inversion), <code>S2</code> (verifier), <code>S</code> final policy score.</li>
+          <li><strong>CP (Conformal Prediction)</strong>: per‑domain τ threshold gating accept/abstain; view with CP page.</li>
+          <li><strong>Tools</strong>: WEB_SEARCH/WEB_FETCH/MATH_EVAL/TABLE_QUERY; may require approval depending on policy.</li>
+          <li><strong>Workspace</strong>: multi‑tenant context; affects docs root, DB path, and vector store.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="playground" class="card mb-3">
+      <div class="card-header">Playground</div>
+      <div class="card-body">
+        <p>Ask a question and watch a live SSE stream of tokens and events.</p>
+        <ul>
+          <li>Inputs: question, domain, optional <em>API Key</em> and <em>Workspace</em>, budgets and borderline Δ.</li>
+          <li>Output panels: Answer, Tools log, Scores, PCN and GoV, Final JSON.</li>
+          <li>Buttons: Start/Stop/Reset, Copy JSON, Copy cURL (POST).</li>
+        </ul>
+        <p><strong>Example:</strong> “In 5 bullets, explain UAMM’s subsystems and where they live under <code>src/uamm/</code>.”</p>
+      </div>
+    </div>
+
+    <div id="rag" class="card mb-3">
+      <div class="card-header">RAG (Docs)</div>
+      <div class="card-body">
+        <p>Manage retrieval corpus per workspace.</p>
+        <ul>
+          <li><strong>Upload File</strong>: POST to <code>/rag/upload-file</code>. Optional Workspace and API Key headers.</li>
+          <li><strong>Ingest Folder</strong>: POST to <code>/rag/ingest-folder</code> for paths under configured <em>docs_dir</em>.</li>
+          <li><strong>Search Corpus</strong>: GET <code>/rag/search</code> to preview snippets and scores.</li>
+        </ul>
+        <p><strong>Tip:</strong> Upload project docs (e.g., README) to see better grounding in the Playground.</p>
+      </div>
+    </div>
+
+    <div id="obs" class="card mb-3">
+      <div class="card-header">Steps & Metrics</div>
+      <div class="card-body">
+        <p>Observe system behavior and curate real cases for iteration.</p>
+        <ul>
+          <li><strong>Metrics</strong>: counts, rates, latency, alert badges (latency/abstain/CP/approvals). Auto‑refresh supported.</li>
+          <li><strong>Recent Steps</strong>: filter by <em>domain/action</em>, view detail JSON for any step.</li>
+          <li><strong>Copy Selected</strong>: copy a JSON pack of selected rows for model analysis or bug reports.</li>
+        </ul>
+        <p><strong>Example use:</strong> Filter <em>finance</em>, select several <em>abstain</em> steps, copy selection, and review issues/tools.</p>
+      </div>
+    </div>
+
+    <div id="workspaces" class="card mb-3">
+      <div class="card-header">Workspaces</div>
+      <div class="card-body">
+        <p>Create and manage workspaces and API keys (admin operations).</p>
+        <ul>
+          <li>Create workspace (optional filesystem root); list all workspaces.</li>
+          <li>Keys: list existing, issue new (token revealed once), deactivate.</li>
+          <li>Headers for UI/API: <code>Authorization: Bearer &lt;key&gt;</code>, <code>X-Workspace</code>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="cp" class="card mb-3">
+      <div class="card-header">CP Thresholds</div>
+      <div class="card-body">
+        <p>View per‑domain τ (tau) and related stats snapshots.</p>
+        <ul>
+          <li>Lookup with GET <code>/cp/threshold?domain=…</code>.</li>
+          <li>Used by the policy gate to decide <em>accept</em> vs <em>abstain</em>.</li>
+          <li>Updated by CP evals when enabled (see Evals page).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="evals" class="card mb-3">
+      <div class="card-header">Evals & Tuning</div>
+      <div class="card-body">
+        <p>Run evaluation suites or ad‑hoc items, then propose/apply tuning.</p>
+        <ul>
+          <li><strong>Run Suites</strong>: select suites (e.g., CP‑B1, Stack‑G1), choose <em>Update CP</em>, run; inspect per‑suite metrics.</li>
+          <li><strong>Ad‑hoc Items</strong>: add questions with domains and correctness labels; configure budgets and CP decision usage.</li>
+          <li><strong>Tuner</strong>: set targets (accept_min, abstain_max, false_accept_max, latency_p95_max), then <em>Propose</em> and <em>Apply</em>.</li>
+          <li><strong>Recent Runs</strong>: reopen prior runs and compare metrics.</li>
+        </ul>
+        <p><strong>Example:</strong> Run CP‑B1 to refresh τ, then Stack‑G1 to check end‑to‑end behavior; if accept rate drops too far, propose a patch and apply.</p>
+      </div>
+    </div>
+
+    <div id="flows" class="card mb-3">
+      <div class="card-header">Typical Workflows</div>
+      <div class="card-body">
+        <ol class="mb-2">
+          <li><strong>Try & Inspect</strong>: Ask in Playground → watch scores/tools → view step detail in Steps & Metrics.</li>
+          <li><strong>Grounding</strong>: Upload docs in RAG → ask again in Playground (same workspace) → confirm citations/tools.</li>
+          <li><strong>Debug</strong>: Filter Steps & Metrics by domain/action → view failing cases → copy selection for review.</li>
+          <li><strong>Evaluate</strong>: Run suites in Evals → review metrics → optionally update CP reference.</li>
+          <li><strong>Tune</strong>: Propose a patch (targets) → apply → re‑run suites and verify improvements.</li>
+        </ol>
+        <p class="mb-0"><strong>Tip:</strong> Use the Playground’s “Copy cURL” for reproducible API calls outside the UI.</p>
+      </div>
+    </div>
+
+    <div id="security" class="card mb-3">
+      <div class="card-header">Security Tips</div>
+      <div class="card-body">
+        <ul class="mb-0">
+          <li>Never paste secrets into chat or logs. Use the API Key inputs (masked) or environment variables in server.</li>
+          <li>Use workspace scoping (X‑Workspace) to separate datasets, metrics, and vectors by team.</li>
+          <li>Dangerous tools can be restricted via workspace policies; approvals can pause execution until confirmed.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

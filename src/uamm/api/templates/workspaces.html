@@ -1,0 +1,556 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumb-wrap" aria-label="breadcrumb">
+  <ol class="breadcrumb mb-2">
+    <li class="breadcrumb-item"><a href="/ui/home">Home</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Workspaces</li>
+  </ol>
+</nav>
+<div class="row">
+  <div class="col-lg-5">
+    <!-- Session Settings (applies to this browser session) -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span>Session Settings</span>
+      </div>
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label small">Current Workspace</label>
+            <input id="sess-ws" class="form-control" list="ws-dlist" placeholder="default">
+            <datalist id="ws-dlist"></datalist>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">API Key</label>
+            <input id="sess-key" type="password" class="form-control" placeholder="wk_…">
+          </div>
+          <div class="col-12 d-flex gap-2">
+            <button class="btn btn-outline-primary" onclick="wsSessionSave()">Save</button>
+            <button class="btn btn-outline-secondary" onclick="wsSessionClearKey()">Clear Key</button>
+            <button class="btn btn-outline-secondary ms-auto" onclick="wsLoadWorkspacesList()">Load Workspaces</button>
+          </div>
+        </div>
+        <div class="small text-muted mt-2">These settings apply only to this browser session.</div>
+      </div>
+    </div>
+
+    <!-- Selected Workspace Dashboard -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span>Selected Workspace — Dashboard</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadWsDash()">Refresh</button>
+      </div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-6"><div class="small text-muted">Last Activity</div><div id="wsdash-last">—</div></div>
+          <div class="col-6"><div class="small text-muted">Latest Doc</div><div id="wsdash-doc">—</div></div>
+        </div>
+        <div class="mt-2 d-flex gap-2">
+          <a id="wsdash-play" class="btn btn-sm btn-outline-primary" href="#">Open Playground</a>
+          <a id="wsdash-obs" class="btn btn-sm btn-outline-secondary" href="#">Recent Steps</a>
+          <a id="wsdash-rag" class="btn btn-sm btn-outline-secondary" href="#">Manage Docs</a>
+          <a id="wsdash-cp" class="btn btn-sm btn-outline-secondary" href="#">View CP</a>
+        </div>
+        <div class="row mt-3 g-2 align-items-center">
+          <div class="col-6">
+            <div class="small text-muted">Docs (last 7d)</div>
+            <svg id="spark-docs" viewBox="0 0 140 30" width="140" height="30"></svg>
+          </div>
+          <div class="col-6">
+            <div class="small text-muted">Steps (last 7d)</div>
+            <svg id="spark-steps" viewBox="0 0 140 30" width="140" height="30"></svg>
+          </div>
+          <div class="col-12 d-flex align-items-center gap-2">
+            <label for="wsdash-days" class="form-label small mb-0">Period</label>
+            <select id="wsdash-days" class="form-select form-select-sm" style="width: 90px;" onchange="loadWsDash()">
+              <option value="7" selected>7 days</option>
+              <option value="14">14 days</option>
+              <option value="30">30 days</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span>Create Workspace</span>
+        <div class="ms-auto d-flex gap-2">
+          <button class="btn btn-sm btn-outline-success" onclick="createTestWorkspace()">Create Test Workspace</button>
+          <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#wsWizard">Wizard…</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <form id="ws-create" onsubmit="createWorkspace(event)">
+          <div class="mb-2"><input id="slug" class="form-control" placeholder="slug (required)" required /></div>
+          <div class="mb-2"><input id="name" class="form-control" placeholder="name (optional)" /></div>
+          <div class="mb-2"><input id="root" class="form-control" placeholder="filesystem root (optional)" /></div>
+          <div class="mb-2"><input id="admin-key" type="password" class="form-control" placeholder="Admin API Key (optional)" /></div>
+          <button class="btn btn-primary" type="submit">Create</button>
+        </form>
+        <div id="ws-create-result" class="small mt-2 text-muted"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <!-- All Workspaces (manage all) -->
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <span>All Workspaces</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadWorkspaces()">Refresh</button>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle">
+            <thead><tr><th>Slug</th><th>Name</th><th>Root</th><th class="text-end">Actions</th></tr></thead>
+            <tbody id="ws-body"><tr><td colspan="4" class="text-muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <!-- Selected Workspace: Keys -->
+    <div class="card">
+      <div class="card-header">Selected Workspace — Keys <span class="text-muted">(<span id="keys-ws">—</span>)</span></div>
+      <div class="card-body">
+        <form id="key-issue" onsubmit="issueKey(event)" class="row g-2 align-items-end">
+          <div class="col-md-3"><input id="key-role" class="form-control" placeholder="role (admin|editor|viewer)" /></div>
+          <div class="col-md-5"><input id="key-label" class="form-control" placeholder="label" /></div>
+          <div class="col-md-4"><button class="btn btn-outline-primary w-100" type="submit">Issue Key</button></div>
+          <input type="hidden" id="key-ws-hidden" />
+          <div class="col-12 mt-2"><input id="key-admin" type="password" class="form-control" placeholder="Admin API Key (optional)" /></div>
+        </form>
+        <div id="key-issued" class="small mt-2"></div>
+        <div id="keys-list" class="mt-3"></div>
+      </div>
+    </div>
+
+    <!-- Selected Workspace: Policies -->
+    <div class="card mt-3">
+      <div class="card-header">Selected Workspace — Policy Overlay</div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-md-3">
+            <label class="form-label small">Accept Threshold</label>
+            <input id="pol-acc" class="form-control" placeholder="e.g. 0.85">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Borderline Δ</label>
+            <input id="pol-delta" class="form-control" placeholder="e.g. 0.05">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Tools/Turn</label>
+            <input id="pol-tools-turn" class="form-control" placeholder="e.g. 4">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Tools/Refine</label>
+            <input id="pol-tools-ref" class="form-control" placeholder="e.g. 2">
+          </div>
+          <div class="col-12">
+            <label class="form-label small">Tools requiring approval (comma-separated)</label>
+            <input id="pol-approve" class="form-control" placeholder="WEB_FETCH,TABLE_QUERY">
+          </div>
+        </div>
+        <div class="mt-2 d-flex gap-2">
+          <button class="btn btn-outline-primary" onclick="applyOverlay()">Apply Overlay</button>
+          <button class="btn btn-outline-secondary" onclick="clearOverlayForm()">Clear</button>
+        </div>
+        <div id="pol-status" class="small text-muted mt-2"></div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header d-flex align-items-center">
+        <span>Selected Workspace — Policy Packs</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadPolicyList()">Load Packs</button>
+      </div>
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label small">Policy Pack</label>
+            <select id="pol-pack" class="form-select" onchange="previewPolicy()">
+              <option value="">Select a policy pack…</option>
+            </select>
+          </div>
+          <div class="col-md-6 d-grid">
+            <button class="btn btn-outline-primary" onclick="applyPolicyPack()">Apply Pack</button>
+          </div>
+        </div>
+        <div class="mt-3">
+          <div class="small text-muted">Differences vs current applied:</div>
+          <pre id="pol-diff" class="small bg-light p-2 border rounded" style="max-height: 240px; overflow:auto;">—</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create Workspace Wizard Modal -->
+<div class="modal fade" id="wsWizard" tabindex="-1" aria-labelledby="wsWizardLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="wsWizardLabel">Create Workspace — Wizard</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <ol class="small text-muted">
+          <li>Define slug and name</li>
+          <li>Choose root (auto-managed recommended)</li>
+          <li>Issue editor key</li>
+          <li>Seed sample docs</li>
+        </ol>
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Slug</label>
+            <input id="wz-slug" class="form-control" placeholder="team-abc"/>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label">Name</label>
+            <input id="wz-name" class="form-control" placeholder="Team ABC"/>
+          </div>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="wz-auto-root" checked>
+              <label class="form-check-label" for="wz-auto-root">Use auto-managed root under <code>data/workspaces/&lt;slug&gt;</code></label>
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Custom root (optional)</label>
+            <input id="wz-root" class="form-control" placeholder="/abs/path/within/allowed/bases"/>
+            <div class="form-text">If restricted bases are configured, the root must be inside one of them.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Issue editor key with label</label>
+            <input id="wz-key-label" class="form-control" placeholder="editor-ui" value="editor-ui"/>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Seed with sample doc</label>
+            <select id="wz-seed" class="form-select">
+              <option value="readme">README excerpt</option>
+              <option value="hello">Hello workspace</option>
+              <option value="none">Do not seed</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-3" id="wz-status" class="small text-muted"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-primary" onclick="runWizard()">Create</button>
+      </div>
+    </div>
+  </div>
+ </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Session Settings helpers (page-local)
+function wsSessionPrefill(){
+  try{
+    const ws = (window.uammCtx && window.uammCtx.ws) || 'default';
+    const key = (window.uammCtx && window.uammCtx.key) || '';
+    const wsEl = document.getElementById('sess-ws'); if (wsEl) wsEl.value = ws;
+    const keyEl = document.getElementById('sess-key'); if (keyEl) keyEl.value = key;
+  }catch(e){}
+}
+function wsSessionSave(){
+  try{
+    const ws = (document.getElementById('sess-ws').value||'').trim() || 'default';
+    const key = (document.getElementById('sess-key').value||'').trim();
+    window.uammCtx = window.uammCtx || {};
+    window.uammCtx.ws = ws;
+    if (key !== '') window.uammCtx.key = key; else window.uammCtx.key = '';
+    try { localStorage.setItem('uamm.ws', ws); } catch(e){}
+    try { if (key==='') localStorage.removeItem('uamm.key'); else localStorage.setItem('uamm.key', key); } catch(e){}
+    if (window.ctxLoadStats) window.ctxLoadStats();
+    showToast('Session updated');
+    loadWsDash();
+  }catch(e){ showToast('Failed to save'); }
+}
+async function wsLoadWorkspacesList(){
+  const dl = document.getElementById('ws-dlist'); if (!dl) return;
+  dl.innerHTML = '';
+  try{ const res = await ctxFetch('/workspaces'); const data = await res.json(); if (!res.ok) throw new Error('failed'); dl.innerHTML = (data.workspaces||[]).map(w=>`<option value="${w.slug}">`).join(''); showToast('Loaded workspaces'); }catch(e){ showToast('Failed to load'); }
+}
+function wsSessionClearKey(){ try{ document.getElementById('sess-key').value=''; localStorage.removeItem('uamm.key'); if (window.uammCtx) window.uammCtx.key=''; showToast('Key cleared'); }catch(e){} }
+
+async function loadWorkspaces() {
+  const body = document.getElementById('ws-body');
+  body.innerHTML = '<tr><td colspan="4" class="text-muted">Loading…</td></tr>';
+  try {
+    const res = await ctxFetch('/workspaces');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'failed');
+    const wss = data.workspaces || [];
+    if (!wss.length) { body.innerHTML = '<tr><td colspan="4" class="text-muted">No workspaces</td></tr>'; return; }
+    body.innerHTML = wss.map(ws => `
+      <tr>
+        <td>${escapeHtml(ws.slug||'')}</td>
+        <td>${escapeHtml(ws.name||'')}</td>
+        <td class="text-truncate" style="max-width:300px;">${escapeHtml(ws.root||'')}</td>
+        <td class="text-end">
+          <div class="btn-group btn-group-sm" role="group">
+            <button class="btn btn-outline-primary" onclick="setSessionWorkspace('${encodeURIComponent(ws.slug)}')">Use</button>
+            <button class="btn btn-outline-secondary" onclick="loadKeys('${encodeURIComponent(ws.slug)}')">Keys</button>
+            <button class="btn btn-outline-danger" onclick="confirmDelete('${encodeURIComponent(ws.slug)}')">Delete</button>
+          </div>
+        </td>
+      </tr>`).join('');
+  } catch (e) {
+    body.innerHTML = '<tr><td colspan="4" class="text-danger">Error</td></tr>';
+  }
+}
+
+async function createWorkspace(ev) {
+  ev.preventDefault();
+  const slug = document.getElementById('slug').value.trim();
+  const name = document.getElementById('name').value.trim();
+  const root = document.getElementById('root').value.trim();
+  try {
+    const res = await ctxFetch('/workspaces', {
+      method: 'POST',
+      headers: Object.assign({'content-type':'application/json'}),
+      body: JSON.stringify({slug, name, root: root || undefined})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'failed');
+    document.getElementById('ws-create-result').textContent = 'Created ' + (data.workspace?.slug || slug);
+    loadWorkspaces();
+  } catch (e) {
+    document.getElementById('ws-create-result').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function loadWsDash(){
+  const ws = (window.uammCtx && window.uammCtx.ws) || 'default';
+  // Links
+  document.getElementById('wsdash-play').href = '/ui?ws=' + encodeURIComponent(ws);
+  document.getElementById('wsdash-obs').href = '/ui/obs?ws=' + encodeURIComponent(ws);
+  document.getElementById('wsdash-rag').href = '/ui/rag?ws=' + encodeURIComponent(ws);
+  document.getElementById('wsdash-cp').href = '/ui/cp?ws=' + encodeURIComponent(ws);
+  try{
+    const res = await ctxFetch('/workspaces/' + encodeURIComponent(ws) + '/stats');
+    const data = await res.json();
+    if(!res.ok) throw new Error('failed');
+    const last = data.last_step_ts ? new Date(data.last_step_ts*1000).toLocaleString() : '—';
+    document.getElementById('wsdash-last').textContent = last;
+    const doc = data.doc_latest;
+    document.getElementById('wsdash-doc').textContent = doc ? (doc.title || doc.id || 'doc') + (doc.ts?(' • ' + new Date(doc.ts*1000).toLocaleString()):'') : '—';
+  } catch(e){ /* ignore */ }
+  // Trend
+  try{
+    const daysSel = document.getElementById('wsdash-days');
+    const days = daysSel ? parseInt(daysSel.value||'7') : 7;
+    const tr = await ctxFetch('/workspaces/' + encodeURIComponent(ws) + '/trend?days=' + days);
+    const td = await tr.json();
+    if (tr.ok) {
+      drawSpark('spark-docs', td.docs || [], '#6c757d');
+      drawSpark('spark-steps', td.steps || [], '#0d6efd');
+    }
+  }catch(e){}
+}
+
+async function createTestWorkspace(){
+  const slug = 'test-' + new Date().toISOString().slice(0,19).replaceAll(':','').replaceAll('-','').replace('T','').toLowerCase();
+  document.getElementById('slug').value = slug;
+  document.getElementById('name').value = 'Test ' + slug;
+  document.getElementById('root').value = '';
+  await createWorkspace(new Event('submit'));
+  // Switch context
+  if (window.uammCtx){ window.uammCtx.ws = slug; localStorage.setItem('uamm.ws', slug); }
+  if (window.ctxLoadStats) window.ctxLoadStats();
+  showToast('Test workspace created: ' + slug);
+}
+
+async function runWizard(){
+  const slug = (document.getElementById('wz-slug').value || '').trim();
+  if (!slug){ showToast('Slug is required'); return; }
+  const name = (document.getElementById('wz-name').value || slug).trim();
+  const auto = document.getElementById('wz-auto-root').checked;
+  const given = (document.getElementById('wz-root').value || '').trim();
+  const root = auto ? ('data/workspaces/' + slug) : given || null;
+  const label = (document.getElementById('wz-key-label').value || 'editor-ui').trim();
+  const seed = document.getElementById('wz-seed').value;
+  const out = document.getElementById('wz-status');
+  out.textContent = 'Creating…';
+  try {
+    // 1) Create workspace
+    let res = await ctxFetch('/workspaces', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({slug, name, root}) });
+    let data = await res.json();
+    if (!res.ok){
+      // Fallback: try without root
+      res = await ctxFetch('/workspaces', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({slug, name}) });
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error||'failed to create');
+    }
+    // 2) Issue editor key (requires admin key in context)
+    let issued = null;
+    try{
+      const kres = await ctxFetch(`/workspaces/${encodeURIComponent(slug)}/keys`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({role:'editor', label}) });
+      const kdata = await kres.json();
+      if (kres.ok && kdata.api_key){ issued = kdata.api_key; }
+    } catch(e){ /* ignore */ }
+    // 3) Switch context and optionally seed
+    window.uammCtx.ws = slug; localStorage.setItem('uamm.ws', slug);
+    if (issued){ window.uammCtx.key = issued; localStorage.setItem('uamm.key', issued); }
+    if (seed !== 'none'){
+      const title = seed==='readme' ? 'README excerpt' : 'Hello workspace';
+      const text = seed==='readme' ? 'This workspace was bootstrapped for testing UAMM UI flows.' : `Welcome to ${slug}!`;
+      try{
+        await ctxFetch('/rag/docs', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({title, text}) });
+      } catch(e){ /* ignore */ }
+    }
+    if (window.ctxLoadStats) window.ctxLoadStats();
+    out.innerHTML = `Done. <strong>${slug}</strong> is ready. <a href="/ui?ws=${encodeURIComponent(slug)}">Go to Playground</a>`;
+    loadWorkspaces();
+  } catch(e){
+    out.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function loadKeys(slug) {
+  const ws = decodeURIComponent(slug);
+  document.getElementById('keys-ws').textContent = ws;
+  document.getElementById('key-ws-hidden').value = ws;
+  const listEl = document.getElementById('keys-list');
+  listEl.innerHTML = '<div class="text-muted small">Loading…</div>';
+  try {
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/keys`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'failed');
+    const keys = data.keys || [];
+    if (!keys.length) { listEl.innerHTML = '<div class="text-muted">No keys</div>'; return; }
+    listEl.innerHTML = '<ul class="list-unstyled mb-0">' + keys.map(k => `
+      <li class="border rounded p-2 mb-2 d-flex align-items-center">
+        <span class="me-auto">${escapeHtml(k.label||'')} — ${escapeHtml(k.role||'')} ${k.active ? '' : '(inactive)'} <span class="text-muted">#${escapeHtml(k.id)}</span></span>
+        ${k.active ? `<button class="btn btn-sm btn-outline-danger" onclick="deactivateKey('${encodeURIComponent(ws)}','${encodeURIComponent(k.id)}')">Deactivate</button>` : ''}
+      </li>`).join('') + '</ul>';
+  } catch (e) {
+    listEl.innerHTML = '<div class="text-danger small">Error</div>';
+  }
+}
+
+async function applyOverlay(){
+  const ws = document.getElementById('key-ws-hidden').value.trim();
+  if (!ws){ showToast('Select a workspace first'); return; }
+  const overlay = {};
+  const acc = document.getElementById('pol-acc').value.trim(); if (acc) overlay.accept_threshold = parseFloat(acc);
+  const dl = document.getElementById('pol-delta').value.trim(); if (dl) overlay.borderline_delta = parseFloat(dl);
+  const tt = document.getElementById('pol-tools-turn').value.trim(); if (tt) overlay.tool_budget_per_turn = parseInt(tt);
+  const tr = document.getElementById('pol-tools-ref').value.trim(); if (tr) overlay.tool_budget_per_refinement = parseInt(tr);
+  const appr = document.getElementById('pol-approve').value.trim(); if (appr) overlay.tools_requiring_approval = appr.split(',').map(s=>s.trim()).filter(Boolean);
+  const out = document.getElementById('pol-status');
+  out.textContent = 'Applying…';
+  try{
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/policies/overlay`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({overlay})});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error||'failed');
+    out.textContent = 'Applied overlay';
+  } catch(e){ out.textContent = 'Error applying'; }
+}
+function clearOverlayForm(){ document.getElementById('pol-acc').value=''; document.getElementById('pol-delta').value=''; document.getElementById('pol-tools-turn').value=''; document.getElementById('pol-tools-ref').value=''; document.getElementById('pol-approve').value=''; document.getElementById('pol-status').textContent=''; }
+
+async function loadPolicyList(){
+  try{
+    const res = await ctxFetch('/policies');
+    const data = await res.json();
+    if (!res.ok) throw new Error('failed');
+    const sel = document.getElementById('pol-pack');
+    if (!sel) return;
+    const packs = (data.policies||[]).map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+    sel.innerHTML = '<option value="">Select a policy pack…</option>' + packs;
+  } catch(e){ showToast('Failed to load packs'); }
+}
+
+async function previewPolicy(){
+  const ws = document.getElementById('key-ws-hidden').value.trim();
+  const sel = document.getElementById('pol-pack'); if (!sel || !ws) return;
+  const name = sel.value; if (!name) { document.getElementById('pol-diff').textContent = '—'; return; }
+  try{
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/policies/preview/${encodeURIComponent(name)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error('failed');
+    document.getElementById('pol-diff').textContent = JSON.stringify(data.diff||{}, null, 2);
+  } catch(e){ document.getElementById('pol-diff').textContent = 'Error'; }
+}
+
+async function applyPolicyPack(){
+  const ws = document.getElementById('key-ws-hidden').value.trim();
+  const sel = document.getElementById('pol-pack'); if (!sel || !ws) { showToast('Select a workspace'); return; }
+  const name = sel.value; if (!name) { showToast('Choose a pack'); return; }
+  try{
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/policies/apply`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({name})});
+    const data = await res.json();
+    if (!res.ok) throw new Error('failed');
+    showToast('Applied pack ' + name);
+  } catch(e){ showToast('Failed to apply'); }
+}
+
+async function issueKey(ev) {
+  ev.preventDefault();
+  const ws = document.getElementById('key-ws-hidden').value.trim();
+  const role = document.getElementById('key-role').value.trim();
+  const label = document.getElementById('key-label').value.trim();
+  if (!ws) { showToast('Select a workspace first'); return; }
+  try {
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/keys`, {
+      method: 'POST',
+      headers: Object.assign({'content-type':'application/json'}),
+      body: JSON.stringify({role, label})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'failed');
+    const token = data.api_key;
+    document.getElementById('key-issued').innerHTML = `Issued key: <code>${escapeHtml(token)}</code> (copy and store securely)`;
+    loadKeys(encodeURIComponent(ws));
+  } catch (e) {
+    document.getElementById('key-issued').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function deactivateKey(slug, keyId) {
+  const ws = decodeURIComponent(slug);
+  const id = decodeURIComponent(keyId);
+  try {
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/keys/${encodeURIComponent(id)}/deactivate`, {
+      method: 'POST',
+    });
+    await res.json();
+    loadKeys(encodeURIComponent(ws));
+  } catch (e) {
+    showToast('Failed to deactivate key');
+  }
+}
+
+function escapeHtml(s) {
+  return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+}
+
+function setSessionWorkspace(slugEnc){
+  try{
+    const ws = decodeURIComponent(slugEnc);
+    window.uammCtx = window.uammCtx || {};
+    window.uammCtx.ws = ws;
+    try{ localStorage.setItem('uamm.ws', ws); }catch(e){}
+    const inp = document.getElementById('sess-ws'); if (inp) inp.value = ws;
+    if (window.ctxLoadStats) window.ctxLoadStats();
+    loadWsDash();
+    showToast('Workspace set: ' + ws);
+  }catch(e){}
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadWorkspaces(); wsSessionPrefill(); loadWsDash(); });
+
+async function confirmDelete(slug){
+  const ws = decodeURIComponent(slug);
+  if (!confirm(`Delete workspace '${ws}'? This removes metadata; files are kept unless purge is enabled in code.`)) return;
+  try {
+    const res = await ctxFetch(`/workspaces/${encodeURIComponent(ws)}/delete`, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({purge:false}) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error||'failed');
+    showToast('Deleted workspace ' + ws);
+    loadWorkspaces();
+  } catch(e){ showToast('Failed to delete'); }
+}
+</script>
+{% endblock %}

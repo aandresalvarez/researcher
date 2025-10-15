@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UAMM UI</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <style>
+      body { padding-top: 4rem; }
+      pre#answer { white-space: pre-wrap; }
+      .log { max-height: 280px; overflow: auto; }
+      code#final-json { white-space: pre-wrap; }
+      /* Subtle card shadow for depth */
+      .card { box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+      /* Breadcrumb spacing */
+      nav.breadcrumb-wrap { margin-top: .25rem; }
+      /* Sidebar collapse animation */
+      #sidebar { transition: width .2s ease; }
+      #sidebar.collapsed { width: 56px !important; overflow-x: hidden; }
+      #sidebar.collapsed .list-group-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #sidebar.collapsed .ws-label { display: none; }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-body-tertiary fixed-top border-bottom">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="/ui/home">UAMM</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item"><a class="nav-link" href="/ui/home">Home</a></li>
+            <li class="nav-item"><a class="nav-link" href="/ui">Playground</a></li>
+            <li class="nav-item"><a class="nav-link" href="/ui/rag">RAG</a></li>
+            <li class="nav-item"><a class="nav-link" href="/ui/obs">Steps & Metrics</a></li>
+            <!-- <li class="nav-item"><a class="nav-link" href="/ui/workspaces">Workspaces</a></li> -->
+            <li class="nav-item"><a class="nav-link" href="/ui/cp">CP</a></li>
+            <li class="nav-item"><a class="nav-link" href="/ui/evals">Evals</a></li>
+            <li class="nav-item"><a class="nav-link" href="/ui/docs">Docs</a></li>
+          </ul>
+          <div class="ms-auto d-flex align-items-center gap-2"></div>
+        </div>
+      </div>
+    </nav>
+    <main class="container-fluid">
+      <div class="row">
+        <!-- Global left panel: workspace list -->
+        <aside class="col-12 col-md-3 col-lg-2 border-end bg-light {% if fullpage %}d-none{% endif %}" id="sidebar">
+          <div class="p-2" style="position: sticky; top: 4rem;">
+            <div class="d-flex align-items-center mb-2">
+              <strong class="me-auto">Workspaces</strong>
+              <button class="btn btn-sm btn-outline-secondary" onclick="sidebarLoadWorkspaces()" title="Refresh"><span class="spinner-border spinner-border-sm me-1 d-none" id="sb-spinner"></span>⟳</button>
+            </div>
+            <div class="list-group list-group-flush" id="sidebar-ws">
+              <div class="list-group-item small text-muted">Loading…</div>
+            </div>
+            <div class="d-grid gap-2 mt-2">
+              <button class="btn btn-sm btn-success" onclick="sidebarCreateTest()">+ Create Test</button>
+              <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#wsWizardGlobal">Wizard…</button>
+              <a class="btn btn-sm btn-outline-secondary" href="/ui/workspaces">Manage…</a>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Main content area -->
+        <section class="{% if fullpage %}col-12{% else %}col-12 col-md-9 col-lg-10{% endif %}">
+          <div class="d-flex align-items-center mt-2 mb-1">
+            {% if not fullpage %}<button class="btn btn-sm btn-outline-secondary me-2" onclick="toggleSidebarResponsive()" title="Toggle sidebar">☰ Sidebar</button>{% endif %}
+            {% block breadcrumb %}{% endblock %}
+          </div>
+          <div id="ctx-panel" class="alert alert-light border d-flex align-items-center gap-3 flex-wrap {% if fullpage %}d-none{% endif %}" role="alert" style="display:none;">
+            <div><strong>Workspace</strong>: <span id="ctxp-ws">default</span></div>
+            <div class="vr"></div>
+            <div><strong>Docs</strong>: <span id="ctxp-docs">0</span></div>
+            <div><strong>Steps</strong>: <span id="ctxp-steps">0</span></div>
+            <div class="text-muted small" id="ctxp-path"></div>
+            <div class="ms-auto d-flex align-items-center gap-2">
+              <span class="badge text-bg-info" id="ctxp-tau">τ: n/a</span>
+              <input id="ctxp-domain" class="form-control form-control-sm" placeholder="domain" value="default" style="width: 140px;" list="ctxp-domain-list"/>
+              <datalist id="ctxp-domain-list"></datalist>
+              <button class="btn btn-sm btn-outline-secondary" onclick="ctxLoadTau()" title="Refresh CP tau">CP</button>
+              <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ctxModal" title="Set API Key">Key</button>
+            </div>
+          </div>
+          {% block content %}{% endblock %}
+        </section>
+      </div>
+    </main>
+    <!-- Toast container -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080">
+      <div id="toast" class="toast align-items-center text-bg-danger border-0" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="d-flex">
+          <div class="toast-body" id="toast-body">Error</div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
+    <!-- Context Modal -->
+    <div class="modal fade" id="ctxModal" tabindex="-1" aria-labelledby="ctxModalLabel" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="ctxModalLabel">Set Context</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-2">
+              <label class="form-label">Workspace</label>
+              <input id="ctx-ws" class="form-control" list="ctx-ws-list" placeholder="default">
+              <datalist id="ctx-ws-list"></datalist>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">API Key (optional)</label>
+              <input id="ctx-key" type="password" class="form-control" placeholder="wk_...">
+            </div>
+            <div class="small text-muted">The workspace scopes docs, DB, and metrics. The key authorizes admin/editor actions.</div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" onclick="ctxListWorkspaces()">List Workspaces</button>
+            <button type="button" class="btn btn-primary" onclick="ctxSave()" data-bs-dismiss="modal">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% block scripts %}{% endblock %}
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
+    <script src="/static/js/app.js"></script>
+    <script>
+      // Global UI context and helpers
+      (function(){
+        const LS_WS = 'uamm.ws';
+        const LS_KEY = 'uamm.key';
+        function getStored(name, fallback){ try { return localStorage.getItem(name) || fallback; } catch(e){ return fallback; } }
+        function setStored(name, value){ try { if (value===null||value===undefined||value==='') localStorage.removeItem(name); else localStorage.setItem(name, value); } catch(e){} }
+        function qs(name){ try { return new URLSearchParams(window.location.search).get(name); } catch(e){ return null; } }
+        function updateBadge(){ var ws = window.uammCtx.ws || 'default'; var el = document.getElementById('ctx-badge'); if (el) el.textContent = 'WS: ' + ws; var wse = document.getElementById('ctxp-ws'); if (wse) wse.textContent = ws; }
+        window.uammCtx = { ws: getStored(LS_WS, 'default'), key: getStored(LS_KEY, '') };
+        // Allow ?ws= to override context
+        var wsParam = qs('ws'); if (wsParam) { window.uammCtx.ws = wsParam; setStored(LS_WS, wsParam); }
+        updateBadge();
+        window.ctxSave = function(){ var ws = document.getElementById('ctx-ws').value.trim() || 'default'; var key = document.getElementById('ctx-key').value.trim(); window.uammCtx.ws = ws; if (key!=='') { window.uammCtx.key = key; setStored(LS_KEY, key); } setStored(LS_WS, ws); updateBadge(); };
+        window.ctxListWorkspaces = async function(){ try { var res = await window.ctxFetch('/workspaces'); var data = await res.json(); if (!res.ok) throw new Error('failed'); var dl = document.getElementById('ctx-ws-list'); if (!dl) return; dl.innerHTML = (data.workspaces||[]).map(w => `<option value="${w.slug}">`).join(''); showToast('Loaded workspaces'); } catch(e){ showToast('Failed to list workspaces'); } };
+        window.ctxFetch = function(input, init){ init = init || {}; init.headers = Object.assign({}, init.headers || {}); if (window.uammCtx.ws) init.headers['X-Workspace'] = window.uammCtx.ws; if (window.uammCtx.key) init.headers['Authorization'] = 'Bearer ' + window.uammCtx.key; return fetch(input, init); };
+        window.getCtxWs = function(){ return window.uammCtx.ws || 'default'; };
+        window.showToast = function(msg){ var el = document.getElementById('toast'); var body = document.getElementById('toast-body'); if (!el||!body) return; body.textContent = msg; (new bootstrap.Toast(el)).show(); };
+        window.ctxLoadStats = async function(){ try { var ws = window.uammCtx.ws || 'default'; var res = await window.ctxFetch('/workspaces/' + encodeURIComponent(ws) + '/stats'); var data = await res.json(); if (!res.ok) throw new Error('failed'); var p = document.getElementById('ctx-panel'); if (p) p.style.display = 'flex'; var d = (data.counts||{}).docs || 0; var s = (data.counts||{}).steps || 0; var dp = document.getElementById('ctxp-docs'); if (dp) dp.textContent = d; var sp = document.getElementById('ctxp-steps'); if (sp) sp.textContent = s; var pp = document.getElementById('ctxp-path'); if (pp) { var paths = data.paths || {}; pp.textContent = (paths.docs_dir||'') + ' • ' + (paths.db_path||''); } } catch(e) { /* ignore */ } };
+        window.ctxLoadTau = async function(){ try { var inp = document.getElementById('ctxp-domain'); var dom = (inp && inp.value.trim()) || 'default'; if (!dom || dom==='default') { var pd = document.getElementById('domain'); if (pd && pd.value) dom = pd.value.trim(); var fd = document.getElementById('filter-domain'); if (fd && fd.value) dom = fd.value.trim(); }
+            var res = await window.ctxFetch('/cp/threshold?' + new URLSearchParams({domain: dom||'default'})); var data = await res.json(); if (!res.ok) throw new Error('failed'); var tau = (data.tau===null||data.tau===undefined) ? 'n/a' : data.tau; var chip = document.getElementById('ctxp-tau'); if (chip) { chip.textContent = 'τ(' + (dom||'default') + '): ' + tau; chip.classList.remove('text-bg-secondary','text-bg-info','text-bg-success'); chip.classList.add((tau==='n/a')?'text-bg-secondary':'text-bg-success'); } if (inp && (!inp.value || inp.value==='default')) inp.value = dom; } catch(e){ var chip = document.getElementById('ctxp-tau'); if (chip) { chip.textContent = 'τ: n/a'; chip.classList.remove('text-bg-success','text-bg-info'); chip.classList.add('text-bg-secondary'); } } };
+        // Pre-fill modal inputs when opened
+        document.addEventListener('shown.bs.modal', function(ev){ if (ev.target && ev.target.id==='ctxModal'){ var w = document.getElementById('ctx-ws'); var k = document.getElementById('ctx-key'); if (w) w.value = window.uammCtx.ws || 'default'; if (k) k.value = window.uammCtx.key || ''; } });
+        document.addEventListener('DOMContentLoaded', function(){ if (window.ctxLoadStats) window.ctxLoadStats(); if (window.ctxLoadTau) window.ctxLoadTau(); var pd = document.getElementById('domain'); if (pd) pd.addEventListener('change', function(){ if (window.ctxLoadTau) window.ctxLoadTau(); }); var fd = document.getElementById('filter-domain'); if (fd) fd.addEventListener('change', function(){ if (window.ctxLoadTau) window.ctxLoadTau(); }); });
+      })();
+    </script>
+    <script>
+      // Bootstrap: delegate to app.js initializers
+      document.addEventListener('DOMContentLoaded', () => {
+        if (window.sidebarLoadWorkspaces) window.sidebarLoadWorkspaces();
+        if (window.initActiveNavHighlight) window.initActiveNavHighlight();
+        if (window.initTooltips) window.initTooltips();
+        if (window.loadDomainSuggestions) window.loadDomainSuggestions();
+        if (window.ctxLoadTau) window.ctxLoadTau();
+        if (window.initHome) window.initHome();
+        if (window.initPlayground) window.initPlayground();
+      });
+    </script>
+    <!-- Offcanvas Sidebar for small screens -->
+    <div class="offcanvas offcanvas-start" tabindex="-1" id="sidebarOffcanvas" aria-labelledby="sidebarOffcanvasLabel">
+      <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="sidebarOffcanvasLabel">Workspaces</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+      <div class="offcanvas-body">
+        <div class="d-grid gap-2 mb-2">
+          <button class="btn btn-outline-success" onclick="sidebarCreateTest()">+ Create Test</button>
+          <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#wsWizardGlobal">Wizard…</button>
+          <a class="btn btn-outline-secondary" href="/ui/workspaces">Manage…</a>
+        </div>
+        <div id="offcanvas-ws" class="list-group list-group-flush"></div>
+      </div>
+    </div>
+    <!-- Global Workspace Wizard Modal -->
+    <div class="modal fade" id="wsWizardGlobal" tabindex="-1" aria-labelledby="wsWizardGlobalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="wsWizardGlobalLabel">Create Workspace — Wizard</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="row g-2">
+              <div class="col-md-4"><label class="form-label small">Slug</label><input id="g-wz-slug" class="form-control" placeholder="team-abc"></div>
+              <div class="col-md-8"><label class="form-label small">Name</label><input id="g-wz-name" class="form-control" placeholder="Team ABC"></div>
+              <div class="col-12 form-check"><input id="g-wz-auto" class="form-check-input" type="checkbox" checked><label class="form-check-label" for="g-wz-auto">Auto root under data/workspaces/&lt;slug&gt;</label></div>
+              <div class="col-12"><label class="form-label small">Custom root</label><input id="g-wz-root" class="form-control" placeholder="/abs/path/within/allowed/bases"></div>
+              <div class="col-md-6"><label class="form-label small">Editor key label</label><input id="g-wz-label" class="form-control" value="editor-ui"></div>
+              <div class="col-md-6"><label class="form-label small">Seed</label><select id="g-wz-seed" class="form-select"><option value="readme">README excerpt</option><option value="hello">Hello workspace</option><option value="none">Do not seed</option></select></div>
+            </div>
+            <div id="g-wz-status" class="small text-muted mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+            <button class="btn btn-primary" onclick="wsRunWizard()">Create</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      async function wsRunWizard(){
+        const slug = (document.getElementById('g-wz-slug').value||'').trim();
+        if (!slug){ showToast('Slug is required'); return; }
+        const name = (document.getElementById('g-wz-name').value||slug).trim();
+        const auto = document.getElementById('g-wz-auto').checked;
+        const given = (document.getElementById('g-wz-root').value||'').trim();
+        const root = auto ? ('data/workspaces/' + slug) : (given || null);
+        const label = (document.getElementById('g-wz-label').value||'editor-ui').trim();
+        const seed = document.getElementById('g-wz-seed').value;
+        const out = document.getElementById('g-wz-status');
+        out.textContent = 'Creating…';
+        try{
+          let res = await ctxFetch('/workspaces', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({slug, name, root})});
+          let data = await res.json();
+          if (!res.ok){ res = await ctxFetch('/workspaces', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({slug, name})}); data = await res.json(); if (!res.ok) throw new Error(data.error||'failed'); }
+          // Issue editor key
+          try{ const kres = await ctxFetch(`/workspaces/${encodeURIComponent(slug)}/keys`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({role:'editor', label})}); const kd = await kres.json(); if (kres.ok && kd.api_key){ window.uammCtx.key = kd.api_key; localStorage.setItem('uamm.key', kd.api_key); } }catch(e){}
+          // Seed
+          if (seed !== 'none'){ const title = seed==='readme' ? 'README excerpt' : 'Hello workspace'; const text = seed==='readme' ? 'This workspace was bootstrapped for testing UAMM UI flows.' : `Welcome to ${slug}!`; try{ await ctxFetch('/rag/docs', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({title, text})}); }catch(e){} }
+          // Switch context, refresh
+          window.uammCtx.ws = slug; localStorage.setItem('uamm.ws', slug); if (window.ctxLoadStats) window.ctxLoadStats(); sidebarLoadWorkspaces();
+          out.innerHTML = `Done. <strong>${slug}</strong> ready. <a href="/ui?ws=${encodeURIComponent(slug)}">Open Playground</a>`;
+        }catch(e){ out.textContent = 'Error: ' + e.message; }
+      }
+    </script>
+  </body>
+</html>

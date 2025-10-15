@@ -3,8 +3,11 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.staticfiles import StaticFiles
 from .routes import router as api_router
+from .ui import router as ui_router
 from uamm.config.settings import load_settings
 from uamm.storage.db import ensure_schema, ensure_migrations
 from uamm.api.state import (
@@ -424,6 +427,22 @@ def create_app() -> FastAPI:
     app.add_middleware(WorkspacePathMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.include_router(api_router)
+    app.include_router(ui_router)
+    # Silence Chrome DevTools probe for a well-known file
+    app.add_api_route(
+        "/.well-known/appspecific/com.chrome.devtools.json",
+        lambda: JSONResponse({}),
+        methods=["GET"],
+    )
+    # Mount static assets for UI (JS/CSS)
+    try:
+        from pathlib import Path as _Path
+
+        static_dir = _Path(__file__).resolve().parent / "static"
+        if static_dir.exists():
+            app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    except Exception:
+        pass
     return app
 
 
