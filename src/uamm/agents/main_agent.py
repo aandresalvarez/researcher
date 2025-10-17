@@ -7,6 +7,33 @@ from uuid import uuid4
 from uamm.policy.policy import final_score, PolicyConfig, decide
 from uamm.policy.cp import ConformalGate
 from uamm.tools.registry import get_registry, ensure_builtins
+
+# Back-compat shim: expose a module-level math_eval symbol that resolves via
+# the ToolRegistry first, with a fallback to the built-in implementation. Some
+# tests patch `uamm.agents.main_agent.math_eval`, so this indirection preserves
+# that contract while still supporting pluggable tools.
+try:  # pragma: no cover - fallback only
+    from uamm.tools.math_eval import math_eval as _builtin_math_eval
+except Exception:  # pragma: no cover
+    _builtin_math_eval = None
+
+
+def math_eval(expr: str) -> float:
+    reg = None
+    try:
+        reg = get_registry()
+    except Exception:
+        reg = None
+    fn = None
+    try:
+        fn = reg.get("MATH_EVAL") if reg else None  # type: ignore[union-attr]
+    except Exception:
+        fn = None
+    if callable(fn):
+        return float(fn(expr))
+    if _builtin_math_eval is not None:
+        return float(_builtin_math_eval(expr))
+    raise RuntimeError("MATH_EVAL tool unavailable")
 from uamm.agents.verifier import Verifier
 from uamm.rag.pack import build_pack
 from uamm.rag.embeddings import embed_text
@@ -949,12 +976,8 @@ class MainAgent:
                             "pcn",
                             self._pcn.register(pcn_id, policy=policy, provenance=prov),
                         )
-                        fn_math = self._tools.get("MATH_EVAL") if self._tools else None  # type: ignore[union-attr]
-                        if fn_math is None:
-                            from uamm.tools.math_eval import math_eval as _math_eval
-
-                            fn_math = _math_eval
-                        math_value = fn_math(math_expr)
+                        # Use module-level shim to preserve test patchability
+                        math_value = math_eval(math_expr)
                         verify_event = self._pcn.verify_math(
                             pcn_id, expr=math_expr, observed_value=math_value
                         )
