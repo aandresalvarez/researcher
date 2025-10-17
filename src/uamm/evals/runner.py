@@ -33,7 +33,9 @@ def run_evals(
     """
     results: List[Dict[str, Any]] = []
     policy = PolicyConfig(tau_accept=accept_threshold, delta=0.0)
-    agent = MainAgent(cp_enabled=cp_enabled, policy=policy, llm_enabled=bool(llm_enabled))
+    agent = MainAgent(
+        cp_enabled=cp_enabled, policy=policy, llm_enabled=bool(llm_enabled)
+    )
     settings = load_settings()
     for it in items:
         q = str(it.get("question", ""))

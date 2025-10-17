@@ -7,7 +7,7 @@ export class UammRouterOutlet extends HTMLElement {
   connectedCallback(){
     if (this._mounted) return;
     this._mounted = true;
-    
+
     // Subscribe to route changes
     this._routeUnsub = select(selectRoute, (route) => {
       this._renderRoute(route);
@@ -42,7 +42,7 @@ export class UammRouterOutlet extends HTMLElement {
   _getPageTag(routeName) {
     const mapping = {
       'home': 'uamm-home-page',
-      'rag': 'uamm-rag-page', 
+      'rag': 'uamm-rag-page',
       'obs': 'uamm-obs-page',
       'cp': 'uamm-cp-page',
       'evals': 'uamm-evals-page',
@@ -54,4 +54,3 @@ export class UammRouterOutlet extends HTMLElement {
 }
 
 customElements.define('uamm-router-outlet', UammRouterOutlet);
-

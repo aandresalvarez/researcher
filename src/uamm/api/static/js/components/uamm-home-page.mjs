@@ -7,12 +7,12 @@ import { loadWorkspaces, loadSettings, applySettings } from '../core/actions.mjs
 
 export class UammHomePage extends HTMLElement {
   constructor(){ super(); this._mounted=false; }
-  connectedCallback(){ 
-    if (this._mounted) return; 
-    this._mounted=true; 
-    this.innerHTML=this._template(); 
-    this._wire(); 
-    this._prefill(); 
+  connectedCallback(){
+    if (this._mounted) return;
+    this._mounted=true;
+    this.innerHTML=this._template();
+    this._wire();
+    this._prefill();
     // Reactive: settings/workspaces
     this._settingsUnsub = select(selectSettings, (st) => {
       const s = st.data || {};
@@ -38,8 +38,8 @@ export class UammHomePage extends HTMLElement {
     document.addEventListener(EV.WORKSPACE_CHANGE, this._wsHandler);
     document.addEventListener(EV.CONTEXT_CHANGE, this._wsHandler);
   }
-  disconnectedCallback(){ 
-    this._mounted=false; 
+  disconnectedCallback(){
+    this._mounted=false;
     if (this._wsHandler) {
       document.removeEventListener(EV.WORKSPACE_CHANGE, this._wsHandler);
       document.removeEventListener(EV.CONTEXT_CHANGE, this._wsHandler);

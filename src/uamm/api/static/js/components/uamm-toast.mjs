@@ -21,4 +21,3 @@ export class UammToast extends HTMLElement {
 }
 
 customElements.define('uamm-toast', UammToast);
-

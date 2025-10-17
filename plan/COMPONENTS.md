@@ -39,4 +39,3 @@ Cross-cutting
 Notes
 - All components render in light DOM for Bootstrap styling.
 - No globals required; some legacy globals仍 exist for compatibility until cleanup.
-

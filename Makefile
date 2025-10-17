@@ -1,4 +1,4 @@
-PY_VERSION ?= 3.14
+PY_VERSION ?= 3.12
 VENV ?= .venv
 
 .PHONY: help venv install install-vector vector-venv run dev clean
@@ -7,6 +7,7 @@ help:
 	@echo "Targets:"
 	@echo "  make venv            # Create .venv with Python $(PY_VERSION)"
 	@echo "  make install         # Install deps into $(VENV)"
+	@echo "  make install-core    # Install minimal deps (same as install)"
 	@echo "  make install-vector  # Install deps + vector extras"
 	@echo "  make install-ingest  # Install deps + ingestion extras (PDF/DOCX)"
 	@echo "  make install-ocr     # Install OCR extras (pytesseract/pdf2image)"
@@ -31,6 +32,8 @@ venv:
 
 install:
 	uv pip install -p $(VENV) -e .
+
+install-core: install
 
 install-vector:
 	uv pip install -p $(VENV) -e .[vector]

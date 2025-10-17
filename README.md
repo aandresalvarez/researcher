@@ -14,13 +14,12 @@ Quick start
 - Install uv (package manager): https://docs.astral.sh/uv/
 - Copy `.env.example` to `.env` and fill in values if needed.
 - Create a virtual environment and run the API:
-  - Create venv (Python 3.14): `make venv`
+  - Create venv (Python 3.12): `make venv`
   - Activate venv:
     - macOS/Linux: `source .venv/bin/activate`
     - Windows PowerShell: `.\\.venv\\Scripts\\Activate.ps1`
-  - Install: `make install`
-    - Optional: `make install-vector` (vector backends), `make install-chunk` (tiktoken), `make install-gcp` (GCS tools).
-    - Note: PDF/DOCX parsing and OCR client libraries are installed by default. For OCR of scanned PDFs, system binaries are still required: poppler and tesseract.
+  - Install: `make install` (base only)
+    - Optional extras: `make install-vector` (vector backends), `make install-chunk` (tiktoken), `make install-gcp` (GCS tools), `make install-ingest` (PDF/DOCX), `make install-ocr` (OCR).
   - Run server: `make run`
   - Open docs: http://127.0.0.1:8000/docs
 
@@ -34,6 +33,11 @@ Ask your first question
 - Streaming (SSE):
   `curl -N -X POST http://127.0.0.1:8000/agent/answer/stream -H 'content-type: application/json' -d '{"question":"What is modular memory?"}'`
 
+Quickest path (Core profile)
+- Core disables advanced/background features by default (planning, guardrails, MCP, auto‑ingest).
+- Run: `UAMM_PROFILE=core uvicorn uamm.api.main:create_app --reload --factory`
+- Ask: `curl -s -X POST http://127.0.0.1:8000/agent/answer -H 'content-type: application/json' -d '{"question":"What is modular memory?"}' | jq`
+
 What you’ll see with streaming
 - `ready` → stream is live
 - `token` → incremental text
@@ -42,6 +46,30 @@ What you’ll see with streaming
 - `pcn` → numeric verification status (see PCN below)
 - `gov` → reasoning DAG checks (Graph‑of‑Verification)
 - `final` → full structured result
+
+Streaming lite
+- Set `stream_lite=true` in the POST body to suppress `score/tool/trace/pcn/gov` events and keep only `ready/token/final`.
+
+Health/ready endpoints
+- `GET /healthz` → `{ "status": "ok" }`
+- `GET /readyz` → `{ "status": "ready" }` when DB is reachable, else 503 with `{ "status": "not_ready" }`.
+
+Pluggable tools (ToolRegistry)
+- List tools: `GET /tools` → `{ tools: ["WEB_SEARCH", "WEB_FETCH", ...] }`
+- Register a tool (admin when auth enabled):
+  - `POST /tools/register` with `{ "name": "MY_TOOL", "path": "pkg.module:callable", "overwrite": false }`
+  - The callable will be available to the agent via its registry under `name`.
+- Unregister a tool (admin): `DELETE /tools/{name}`
+- Expected call signatures for built-ins the agent uses:
+  - `WEB_SEARCH(q: str, k: int = 3) -> list`
+  - `WEB_FETCH(url: str, policy: EgressPolicy) -> dict`
+  - `MATH_EVAL(expr: str) -> float`
+  - `TABLE_QUERY(db_path: str, sql: str, params: list, max_rows: int | None, time_limit_ms: int | None) -> list`
+
+Policy JSON migration
+- Prior versions stored workspace policy overlays as Python repr strings. To normalize to JSON:
+  - `PYTHONPATH=src python scripts/migrate_policies_to_json.py --db data/uamm.sqlite`
+  - The script is idempotent and only rewrites convertible rows.
 
 Configuration (basics)
 - App settings live in `config/settings.yaml`. Useful keys:

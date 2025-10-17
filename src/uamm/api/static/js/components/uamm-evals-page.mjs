@@ -6,11 +6,11 @@ import { evalsLoadSuites, evalsLoadRuns, evalsViewRun, evalsRunSuites, tunerProp
 
 export class UammEvalsPage extends HTMLElement {
   constructor(){ super(); this._mounted=false; this._lastProposalId=null; }
-  connectedCallback(){ 
-    if (this._mounted) return; 
-    this._mounted=true; 
-    this.innerHTML = this._template(); 
-    this._wire(); 
+  connectedCallback(){
+    if (this._mounted) return;
+    this._mounted=true;
+    this.innerHTML = this._template();
+    this._wire();
     // Reactive subscriptions
     this._suitesUnsub = select(selectEvalsSuites, (s) => this._renderSuites(s));
     this._runsUnsub = select(selectEvalsRuns, (r) => this._renderRuns(r));
@@ -19,14 +19,14 @@ export class UammEvalsPage extends HTMLElement {
     this._adhocUnsub = select(selectEvalsAdhoc, (a) => this._renderAdhoc(a));
     evalsLoadSuites();
     evalsLoadRuns();
-    this.addItem(); 
+    this.addItem();
     // Listen for workspace/context changes
     this._wsHandler = () => { evalsLoadSuites(); evalsLoadRuns(); };
     document.addEventListener(EV.WORKSPACE_CHANGE, this._wsHandler);
     document.addEventListener(EV.CONTEXT_CHANGE, this._wsHandler);
   }
-  disconnectedCallback(){ 
-    this._mounted=false; 
+  disconnectedCallback(){
+    this._mounted=false;
     if (this._suitesUnsub) { try { this._suitesUnsub(); } catch(_){} this._suitesUnsub=null; }
     if (this._runsUnsub) { try { this._runsUnsub(); } catch(_){} this._runsUnsub=null; }
     if (this._reportUnsub) { try { this._reportUnsub(); } catch(_){} this._reportUnsub=null; }
@@ -151,7 +151,7 @@ export class UammEvalsPage extends HTMLElement {
 
   // Removed older runSuites (batch) in favor of sequential runner below
 
-  
+
 
   _renderSuites(state){
     const el = this.querySelector('#suites');

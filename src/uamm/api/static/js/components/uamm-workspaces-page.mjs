@@ -7,14 +7,14 @@ import { loadWorkspaces as actionLoadWorkspaces, loadWorkspaceDash, loadWorkspac
 
 export class UammWorkspacesPage extends HTMLElement {
   constructor(){ super(); this._mounted=false; }
-  connectedCallback(){ 
-    if (this._mounted) return; 
-    this._mounted=true; 
-    this.innerHTML=this._tpl(); 
-    this._wire(); 
-    this._prefillSession(); 
-    this.loadWorkspaces(); 
-    this.loadWsDash(); 
+  connectedCallback(){
+    if (this._mounted) return;
+    this._mounted=true;
+    this.innerHTML=this._tpl();
+    this._wire();
+    this._prefillSession();
+    this.loadWorkspaces();
+    this.loadWsDash();
     // Reactive: workspaces list from store
     this._wsListUnsub = select(selectWorkspaces, (data) => {
       const body = this.querySelector('#ws-body');
@@ -56,18 +56,18 @@ export class UammWorkspacesPage extends HTMLElement {
     document.addEventListener(EV.WORKSPACE_CHANGE, this._wsListener);
     document.addEventListener(EV.CONTEXT_CHANGE, this._wsListener);
   }
-  disconnectedCallback(){ 
-    this._mounted=false; 
+  disconnectedCallback(){
+    this._mounted=false;
     if (this._wsListUnsub) { try { this._wsListUnsub(); } catch(_){} this._wsListUnsub = null; }
     if (this._ctxUnsub) { try { this._ctxUnsub(); } catch(_){} this._ctxUnsub = null; }
     if (this._dashUnsub) { try { this._dashUnsub(); } catch(_){} this._dashUnsub = null; }
     if (this._keysUnsub) { try { this._keysUnsub(); } catch(_){} this._keysUnsub = null; }
     if (this._packsUnsub) { try { this._packsUnsub(); } catch(_){} this._packsUnsub = null; }
     if (this._previewUnsub) { try { this._previewUnsub(); } catch(_){} this._previewUnsub = null; }
-    if (this._wsListener) { 
+    if (this._wsListener) {
       document.removeEventListener(EV.WORKSPACE_CHANGE, this._wsListener);
       document.removeEventListener(EV.CONTEXT_CHANGE, this._wsListener);
-      this._wsListener = null; 
+      this._wsListener = null;
     }
   }
 

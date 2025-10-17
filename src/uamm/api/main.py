@@ -22,6 +22,10 @@ from uamm.rag.ingest import scan_folder
 from uamm.security.auth import lookup_key, parse_bearer
 from uamm.security.auth import count_keys, insert_api_key, new_key
 from uamm.storage.workspaces import resolve_paths as ws_resolve_paths
+from uamm.tools.registry import (
+    ensure_builtins as _ensure_tool_builtins,
+    get_registry as _get_tool_registry,
+)
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -195,6 +199,11 @@ def create_app() -> FastAPI:
         app.state.tuner_store = TunerProposalStore(
             ttl_seconds=getattr(settings, "tuner_proposal_ttl_seconds", 3600)
         )
+        # Initialize tool registry with built-ins
+        try:
+            _ensure_tool_builtins(_get_tool_registry())
+        except Exception:
+            pass
         buckets = {"0.1": 0, "0.5": 0, "1": 0, "2.5": 0, "6": 0, "+Inf": 0}
         app.state.metrics = {
             "requests": 0,
@@ -428,6 +437,27 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.include_router(api_router)
     app.include_router(ui_router)
+
+    # Health and readiness probes
+    def _health():
+        return JSONResponse({"status": "ok"})
+
+    def _ready():
+        try:
+            import sqlite3 as _sqlite3
+
+            settings = app.state.settings
+            con = _sqlite3.connect(settings.db_path)
+            con.execute("SELECT 1")
+            con.close()
+            return JSONResponse({"status": "ready"})
+        except Exception as exc:
+            return JSONResponse(
+                {"status": "not_ready", "error": str(exc)}, status_code=503
+            )
+
+    app.add_api_route("/healthz", _health, methods=["GET"])
+    app.add_api_route("/readyz", _ready, methods=["GET"])
     # Silence Chrome DevTools probe for a well-known file
     app.add_api_route(
         "/.well-known/appspecific/com.chrome.devtools.json",

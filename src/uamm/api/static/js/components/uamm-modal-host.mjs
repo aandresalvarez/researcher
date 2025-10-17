@@ -127,4 +127,3 @@ export class UammModalHost extends HTMLElement {
 }
 
 customElements.define('uamm-modal-host', UammModalHost);
-

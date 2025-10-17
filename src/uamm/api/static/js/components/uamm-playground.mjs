@@ -77,6 +77,10 @@ export class UammPlayground extends HTMLElement {
                 <input id="delta" name="delta" type="number" min="0" max="1" step="0.01" class="form-control" value="0.05" />
               </div>
             </div>
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="lite" name="lite" />
+              <label class="form-check-label" for="lite">Stream Lite (hide events)</label>
+            </div>
           </div>
           <div class="card-footer d-flex gap-2">
             <button id="btn-start" class="btn btn-primary" type="submit">Start Streaming</button>
@@ -94,7 +98,7 @@ export class UammPlayground extends HTMLElement {
           <div class="card-header">Answer</div>
           <div class="card-body"><pre id="answer" class="mb-0"></pre></div>
         </div>
-        <div class="card mb-3">
+        <div class="card mb-3" id="events-card">
           <div class="card-header">Scores / Events</div>
           <div class="card-body">
             <div class="row g-3">
@@ -162,6 +166,11 @@ export class UammPlayground extends HTMLElement {
     if (ref) params.max_refinements = ref;
     if (mem) params.memory_budget = mem;
     if (delta) params.borderline_delta = delta;
+    const lite = !!this.querySelector('#lite')?.checked;
+    if (lite) params.stream_lite = true;
+    // Hide events panel when lite is enabled
+    const evCard = this.querySelector('#events-card');
+    if (evCard) evCard.style.display = lite ? 'none' : '';
     const url = `/ui/agent/stream?` + new URLSearchParams(params);
     this._t0 = performance.now();
     this._ft = null;

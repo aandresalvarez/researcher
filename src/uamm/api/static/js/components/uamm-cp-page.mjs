@@ -6,11 +6,11 @@ import { cpLoadThreshold } from '../core/actions.mjs';
 
 export class UammCpPage extends HTMLElement {
   constructor(){ super(); this._mounted = false; }
-  connectedCallback(){ 
-    if (this._mounted) return; 
-    this._mounted = true; 
-    this.innerHTML = this._template(); 
-    this._on('[data-action="refresh"]', 'click', () => this._loadFromInputs()); 
+  connectedCallback(){
+    if (this._mounted) return;
+    this._mounted = true;
+    this.innerHTML = this._template();
+    this._on('[data-action="refresh"]', 'click', () => this._loadFromInputs());
     // Reactive subscription
     this._cpUnsub = select(selectCp, (cp) => {
       const el = this.querySelector('#cp-result');
@@ -27,14 +27,14 @@ export class UammCpPage extends HTMLElement {
         <pre class="small">${this._escape(JSON.stringify(stats, null, 2))}</pre>
       `;
     });
-    this._loadFromInputs(); 
+    this._loadFromInputs();
     // Listen for workspace/context changes
     this._wsHandler = () => this._loadFromInputs();
     document.addEventListener(EV.WORKSPACE_CHANGE, this._wsHandler);
     document.addEventListener(EV.CONTEXT_CHANGE, this._wsHandler);
   }
-  disconnectedCallback(){ 
-    this._mounted = false; 
+  disconnectedCallback(){
+    this._mounted = false;
     if (this._cpUnsub) { try { this._cpUnsub(); } catch(_){} this._cpUnsub = null; }
     if (this._wsHandler) {
       document.removeEventListener(EV.WORKSPACE_CHANGE, this._wsHandler);
