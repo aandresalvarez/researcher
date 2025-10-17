@@ -8,5 +8,4 @@ def test_ui_obs_renders():
     with TestClient(app) as client:
         res = client.get("/ui/obs")
         assert res.status_code == 200
-        assert b"Metrics" in res.content
-        assert b"Recent Steps" in res.content
+        assert b"<uamm-obs-page" in res.content

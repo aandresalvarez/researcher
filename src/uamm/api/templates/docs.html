@@ -2,7 +2,7 @@
 {% block content %}
 <nav class="breadcrumb-wrap" aria-label="breadcrumb">
   <ol class="breadcrumb mb-2">
-    <li class="breadcrumb-item"><a href="/ui/home">Home</a></li>
+    <li class="breadcrumb-item"><a href="#/home">Home</a></li>
     <li class="breadcrumb-item active" aria-current="page">Docs</li>
   </ol>
 </nav>
@@ -61,6 +61,15 @@
           <li><strong>Ingest Folder</strong>: POST to <code>/rag/ingest-folder</code> for paths under configured <em>docs_dir</em>.</li>
           <li><strong>Search Corpus</strong>: GET <code>/rag/search</code> to preview snippets and scores.</li>
         </ul>
+        <div class="mt-2">
+          <div class="fw-semibold">Troubleshooting (PDF/DOCX/OCR)</div>
+          <ul class="mb-2">
+            <li>PDF/DOCX parsers are installed by default. If you are using an older environment, re-run <code>make install</code>.</li>
+            <li>For scanned PDFs (images), OCR requires system binaries: poppler and tesseract (see README “OCR system requirements”).</li>
+            <li>The server returns a <code>warnings</code> array (e.g., <code>pdf_parser_missing</code>, <code>ocr_deps_missing</code>); the UI shows these under the result.</li>
+            <li>Supported file types: <code>.txt</code>, <code>.md</code>, <code>.markdown</code>, <code>.html</code>, <code>.htm</code>, <code>.pdf</code>, <code>.docx</code>. Max size: 2MB.</li>
+          </ul>
+        </div>
         <p><strong>Tip:</strong> Upload project docs (e.g., README) to see better grounding in the Playground.</p>
       </div>
     </div>

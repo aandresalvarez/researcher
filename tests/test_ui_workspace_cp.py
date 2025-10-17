@@ -8,8 +8,7 @@ def test_ui_workspaces_renders():
     with TestClient(app) as client:
         res = client.get("/ui/workspaces")
         assert res.status_code == 200
-        assert b"Create Workspace" in res.content
-        assert b"Workspaces" in res.content
+        assert b"<uamm-workspaces-page" in res.content
 
 
 def test_ui_cp_renders():
@@ -17,4 +16,4 @@ def test_ui_cp_renders():
     with TestClient(app) as client:
         res = client.get("/ui/cp")
         assert res.status_code == 200
-        assert b"CP Threshold" in res.content
+        assert b"<uamm-cp-page" in res.content

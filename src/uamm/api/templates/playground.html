@@ -2,107 +2,11 @@
 {% block content %}
 <nav class="breadcrumb-wrap" aria-label="breadcrumb">
   <ol class="breadcrumb mb-2">
-    <li class="breadcrumb-item"><a href="/ui/home">Home</a></li>
+    <li class="breadcrumb-item"><a href="#/home">Home</a></li>
     <li class="breadcrumb-item active" aria-current="page">Playground</li>
   </ol>
-  </nav>
-<div class="row">
-  <div class="col-lg-6">
-    <form id="ask-form" class="card mb-3" onsubmit="startStream(event)">
-      <div class="card-header">Agent Playground</div>
-      <div class="card-body">
-        <div class="mb-3">
-          <label for="question" class="form-label">Question</label>
-          <textarea id="question" name="question" class="form-control" rows="4" placeholder="Ask something…" required></textarea>
-        </div>
-        <div class="row g-3">
-          <div class="col-md-6">
-            <label for="domain" class="form-label">Domain</label>
-            <input id="domain" name="domain" class="form-control" value="{{ defaults.domain }}" />
-          </div>
-          <div class="col-md-6">
-            <label for="key" class="form-label">API Key (optional)</label>
-            <input id="key" name="key" type="password" class="form-control" placeholder="wk_xxx (optional)" />
-            <div class="form-text">Used for protected endpoints; not stored.</div>
-          </div>
-        </div>
-        <div class="row g-3 mt-1">
-          <div class="col-md-6">
-            <label for="workspace" class="form-label">Workspace (optional)</label>
-            <input id="workspace" name="workspace" class="form-control" placeholder="default" />
-          </div>
-          <div class="col-md-6">
-            <label for="ref" class="form-label">Refinements</label>
-            <input id="ref" name="ref" type="number" min="0" max="6" step="1" class="form-control" value="2" />
-            <div class="form-text">max_refinements</div>
-          </div>
-        </div>
-        <div class="row g-3 mt-1">
-          <div class="col-md-6">
-            <label for="mem" class="form-label">Memory Budget</label>
-            <input id="mem" name="mem" type="number" min="0" max="32" step="1" class="form-control" value="8" />
-          </div>
-          <div class="col-md-6">
-            <label for="delta" class="form-label">Borderline Δ</label>
-            <input id="delta" name="delta" type="number" min="0" max="1" step="0.01" class="form-control" value="0.05" />
-          </div>
-        </div>
-      </div>
-      <div class="card-footer d-flex gap-2">
-        <button id="btn-start" class="btn btn-primary" type="submit">Start Streaming</button>
-        <button id="btn-stop" class="btn btn-outline-secondary" type="button" onclick="stopStream()" disabled>Stop</button>
-        <button id="btn-reset" class="btn btn-outline-danger" type="button" onclick="resetPlaygroundForm()">Reset</button>
-        <span class="ms-auto text-muted">
-          <span id="status" class="badge text-bg-secondary">Idle</span>
-          <span class="ms-2 small">FT: <span id="ft-lat">–</span> • Total: <span id="tot-lat">–</span></span>
-        </span>
-      </div>
-    </form>
-  </div>
-  <div class="col-lg-6">
-    <div class="card mb-3">
-      <div class="card-header">Answer</div>
-      <div class="card-body"><pre id="answer" class="mb-0"></pre></div>
-    </div>
-    <div class="card mb-3">
-      <div class="card-header">Scores / Events</div>
-      <div class="card-body">
-        <div class="row g-3">
-          <div class="col-md-6">
-            <h6>Scores</h6>
-            <div id="scores" class="small"></div>
-          </div>
-          <div class="col-md-6">
-            <h6>Tools</h6>
-            <ul id="tools-log" class="log small list-unstyled mb-0"></ul>
-          </div>
-        </div>
-        <div class="row g-3 mt-2">
-          <div class="col-md-6">
-            <h6>PCN</h6>
-            <div id="pcn" class="small"></div>
-          </div>
-          <div class="col-md-6">
-            <h6>GoV</h6>
-            <div id="gov" class="small"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-header">Final JSON</div>
-      <div class="card-body">
-        <div class="d-flex gap-2 mb-2">
-          <button class="btn btn-sm btn-outline-secondary" onclick="copyFinalJson()">Copy JSON</button>
-          <button class="btn btn-sm btn-outline-primary" onclick="copyCurl()">Copy cURL (POST)</button>
-        </div>
-        <code id="final-json"></code>
-      </div>
-    </div>
-  </div>
-</div>
+</nav>
+<uamm-playground data-domain="{{ defaults.domain }}"></uamm-playground>
 {% endblock %}
 
-{% block scripts %}
-<script src="/static/js/playground.js"></script>
-{% endblock %}
+{% block scripts %}{% endblock %}
