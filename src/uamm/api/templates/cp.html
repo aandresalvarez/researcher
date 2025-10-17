@@ -2,55 +2,11 @@
 {% block content %}
 <nav class="breadcrumb-wrap" aria-label="breadcrumb">
   <ol class="breadcrumb mb-2">
-    <li class="breadcrumb-item"><a href="/ui/home">Home</a></li>
+    <li class="breadcrumb-item"><a href="#/home">Home</a></li>
     <li class="breadcrumb-item active" aria-current="page">CP Thresholds</li>
   </ol>
 </nav>
-<div class="row">
-  <div class="col-lg-6">
-    <div class="card mb-3">
-      <div class="card-header d-flex align-items-center">
-        <span>CP Threshold</span>
-        <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="loadCP()">Refresh</button>
-      </div>
-      <div class="card-body">
-        <div class="row g-2 align-items-end">
-          <div class="col-md-5"><input id="cp-domain" class="form-control" placeholder="domain" value="default" /></div>
-          <div class="col-md-7"><input id="cp-key" type="password" class="form-control" placeholder="Admin API Key (optional)" /></div>
-        </div>
-        <div class="mt-3" id="cp-result" class="small text-muted">Loading…</div>
-      </div>
-    </div>
-  </div>
-</div>
+<uamm-cp-page></uamm-cp-page>
 {% endblock %}
 
-{% block scripts %}
-<script>
-async function loadCP() {
-  const dom = document.getElementById('cp-domain').value.trim() || 'default';
-  const key = document.getElementById('cp-key').value.trim();
-  const el = document.getElementById('cp-result');
-  el.textContent = 'Loading…';
-  try {
-    const res = await ctxFetch('/cp/threshold?' + new URLSearchParams({domain: dom}));
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'failed');
-    const tau = (data.tau === null || data.tau === undefined) ? 'n/a' : data.tau;
-    const stats = data.stats || {};
-    el.innerHTML = `
-      <div><strong>Domain</strong>: ${escapeHtml(data.domain||dom)}</div>
-      <div><strong>τ (tau)</strong>: ${escapeHtml(String(tau))} ${data.cached ? '<span class="badge text-bg-info">cached</span>' : ''}</div>
-      <div class="mt-2"><strong>Stats</strong>:</div>
-      <pre class="small">${escapeHtml(JSON.stringify(stats, null, 2))}</pre>
-    `;
-  } catch (e) {
-    el.innerHTML = '<span class="text-danger">Error</span>';
-  }
-}
-function escapeHtml(s) {
-  return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
-}
-document.addEventListener('DOMContentLoaded', () => loadCP());
-</script>
-{% endblock %}
+{% block scripts %}{% endblock %}

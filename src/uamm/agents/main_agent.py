@@ -52,6 +52,7 @@ class LLMGenerator:
         model_name: str = "gpt-4.1-mini",
         temperature: float = 0.2,
         max_output_tokens: int = 800,
+        enabled_default: bool = True,
     ) -> None:
         self.model_name = model_name
         self.temperature = temperature
@@ -65,6 +66,8 @@ class LLMGenerator:
         self._run_method: Optional[Callable[[Any], Any]] = None
         self._enabled = False
         self._ensure_agent()
+        if not enabled_default:
+            self._enabled = False
 
     # Public API ---------------------------------------------------------
 
@@ -294,12 +297,16 @@ class MainAgent:
     """
 
     def __init__(
-        self, *, cp_enabled: bool = False, policy: PolicyConfig | None = None
+        self,
+        *,
+        cp_enabled: bool = False,
+        policy: PolicyConfig | None = None,
+        llm_enabled: bool = False,
     ) -> None:
         self._cfg = policy or PolicyConfig()
         self._cp = ConformalGate(enabled=cp_enabled)
         self._verifier = Verifier()
-        self._llm = LLMGenerator()
+        self._llm = LLMGenerator(enabled_default=llm_enabled)
         self._snne_calibrators: Dict[str, SNNECalibrator] = {}
         self._pcn = PCNVerifier()
 

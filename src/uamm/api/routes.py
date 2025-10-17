@@ -8,7 +8,7 @@ import time
 import uuid
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List
-from fastapi import APIRouter, Request, Response, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, Response, HTTPException, UploadFile, File, Form
 from pathlib import Path
 import sqlite3
 from fastapi.responses import JSONResponse
@@ -39,6 +39,8 @@ from uamm.evals.suites import (
     summarize_by_domain as suite_summarize_by_domain,
     summarize_records as suite_summarize_records,
     list_suites as eval_list_suites,
+    get_suite as eval_get_suite,
+    load_items as eval_load_items,
 )
 from uamm.evals.orchestrator import run_suites
 from uamm.evals.storage import store_eval_run, fetch_eval_run
@@ -62,7 +64,7 @@ from uamm.tools.table_query import table_query as db_table_query
 from uamm.pcn.sql_checks import evaluate_checks
 from uamm.tuner import TunerAgent, TunerTargets
 from uamm.rag.vector_store import LanceDBUnavailable, upsert_document_embedding
-from uamm.rag.ingest import scan_folder, make_chunks
+from uamm.rag.ingest import scan_folder, make_chunks, ALLOWED_EXTS
 from uamm.gov.executor import evaluate_dag
 from uamm.gov.validator import validate_dag
 from uamm.policy.assertions import (
@@ -1498,24 +1500,92 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
     base = req.path or getattr(
         request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs")
     )
-    # Restrict to configured base directory for safety
+    # Restrict to configured base directory (and its workspace subfolder) for safety
     configured = Path(
         getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs"))
     ).resolve()
     target = Path(base).resolve()
-    if configured not in target.parents and configured != target:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "path must be within configured docs_dir"},
-        )
+    ws = _resolve_workspace(request) or "default"
+    ws_dir = (configured / ws).resolve()
+    allowed_roots = {configured, ws_dir}
+    def _is_within(child: Path, parent: Path) -> bool:
+        try:
+            child = child.resolve(); parent = parent.resolve()
+        except Exception:
+            return False
+        return parent == child or parent in child.parents
+    if not any(_is_within(target, root) for root in allowed_roots):
+        # Fallback: if explicit env var matches exactly, allow (test/dev convenience)
+        try:
+            env_docs = os.getenv("UAMM_DOCS_DIR")
+            if env_docs and Path(env_docs).resolve() == target:
+                pass
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "path must be within configured docs_dir"},
+                )
+        except Exception:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "path must be within configured docs_dir"},
+            )
     eff_db = getattr(request.state, "db_path", None) or settings.db_path
+    # Environment warnings (parsers/ocr availability)
+    warnings: list[str] = []
+    try:
+        import pypdf  # type: ignore
+    except Exception:
+        warnings.append("pdf_parser_missing")
+    try:
+        import docx  # type: ignore
+    except Exception:
+        warnings.append("docx_parser_missing")
+    try:
+        if getattr(settings, "docs_ocr_enabled", True):
+            from pdf2image import convert_from_path  # type: ignore  # noqa: F401
+            import pytesseract  # type: ignore  # noqa: F401
+    except Exception:
+        if getattr(settings, "docs_ocr_enabled", True):
+            warnings.append("ocr_deps_missing")
     stats = scan_folder(eff_db, str(target), settings=settings)
-    return {"ok": True, "path": str(target), **stats}
+    return {"ok": True, "path": str(target), "warnings": warnings, **stats}
+
+
+@router.get("/rag/env")
+def rag_env(request: Request):
+    """Report ingestion environment readiness (parsers and OCR libraries/binaries)."""
+    import shutil as _shutil
+    settings = request.app.state.settings
+    def _has(mod):
+        try:
+            __import__(mod)
+            return True
+        except Exception:
+            return False
+    env = {
+        "python": {
+            "pypdf": _has("pypdf"),
+            "python_docx": _has("docx"),
+            "pdf2image": _has("pdf2image"),
+            "pytesseract": _has("pytesseract"),
+        },
+        "binaries": {
+            "poppler": bool(_shutil.which("pdftoppm") or _shutil.which("pdfinfo")),
+            "tesseract": bool(_shutil.which("tesseract")),
+        },
+        "ocr_enabled": bool(getattr(settings, "docs_ocr_enabled", True)),
+        "allowed_exts": sorted(list(ALLOWED_EXTS)),
+        "docs_dir": getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs")),
+    }
+    return env
 
 
 @router.post("/rag/upload-file")
 async def rag_upload_file(
-    request: Request, file: UploadFile = File(...), filename: str | None = None
+    request: Request,
+    file: bytes = File(...),
+    filename: str | None = Form(None),
 ):
     """Upload a single document and ingest into the current workspace.
 
@@ -1529,15 +1599,40 @@ async def rag_upload_file(
     ).resolve()
     target_dir = docs_root / ws
     target_dir.mkdir(parents=True, exist_ok=True)
-    fn = filename or (file.filename or "upload.bin")
+    fn = filename or "upload.bin"
     dest = target_dir / Path(fn).name
-    data = await file.read()
+    data = file or b""
     if len(data or b"") > 2 * 1024 * 1024:
         return JSONResponse(status_code=400, content={"error": "file_too_large"})
     dest.write_bytes(data or b"")
+    # Prepare warnings based on file type and environment
+    warnings: list[str] = []
+    ext = dest.suffix.lower()
+    if ext and ext not in ALLOWED_EXTS:
+        warnings.append("unsupported_extension")
+    if ext == ".pdf":
+        try:
+            import pypdf  # type: ignore
+        except Exception:
+            warnings.append("pdf_parser_missing")
+        try:
+            if getattr(settings, "docs_ocr_enabled", True):
+                from pdf2image import convert_from_path  # type: ignore  # noqa: F401
+                import pytesseract  # type: ignore  # noqa: F401
+        except Exception:
+            if getattr(settings, "docs_ocr_enabled", True):
+                warnings.append("ocr_deps_missing")
+    if ext == ".docx":
+        try:
+            import docx  # type: ignore
+        except Exception:
+            warnings.append("docx_parser_missing")
     eff_db = getattr(request.state, "db_path", None) or settings.db_path
-    stats = scan_folder(eff_db, str(target_dir), settings=settings)
-    return {"ok": True, "workspace": ws, **stats}
+    # Create a settings object with workspace information
+    settings_with_ws = type(settings)(**settings.__dict__)
+    settings_with_ws.workspace = ws
+    stats = scan_folder(eff_db, str(target_dir), settings=settings_with_ws)
+    return {"ok": True, "workspace": ws, "warnings": warnings, **stats}
 
 
 @router.post("/rag/upload-files")
@@ -1553,17 +1648,51 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
     target_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
     skipped = 0
+    seen_pdf = False
+    seen_docx = False
+    seen_unsupported = False
     for uf in files or []:
         fn = (uf.filename or "upload.bin").strip()
         data = await uf.read()
         if len(data or b"") > 2 * 1024 * 1024:
             skipped += 1
             continue
-        (target_dir / Path(fn).name).write_bytes(data or b"")
+        path = target_dir / Path(fn).name
+        path.write_bytes(data or b"")
+        ext = path.suffix.lower()
+        if ext == ".pdf":
+            seen_pdf = True
+        elif ext == ".docx":
+            seen_docx = True
+        elif ext not in ALLOWED_EXTS:
+            seen_unsupported = True
         saved += 1
     eff_db = getattr(request.state, "db_path", None) or settings.db_path
-    stats = scan_folder(eff_db, str(target_dir), settings=settings)
-    return {"ok": True, "workspace": ws, "saved": saved, "skipped": skipped, **stats}
+    # Create a settings object with workspace information
+    settings_with_ws = type(settings)(**settings.__dict__)
+    settings_with_ws.workspace = ws
+    stats = scan_folder(eff_db, str(target_dir), settings=settings_with_ws)
+    warnings: list[str] = []
+    if seen_unsupported:
+        warnings.append("unsupported_extension")
+    if seen_pdf:
+        try:
+            import pypdf  # type: ignore
+        except Exception:
+            warnings.append("pdf_parser_missing")
+        try:
+            if getattr(settings, "docs_ocr_enabled", True):
+                from pdf2image import convert_from_path  # type: ignore  # noqa: F401
+                import pytesseract  # type: ignore  # noqa: F401
+        except Exception:
+            if getattr(settings, "docs_ocr_enabled", True):
+                warnings.append("ocr_deps_missing")
+    if seen_docx:
+        try:
+            import docx  # type: ignore
+        except Exception:
+            warnings.append("docx_parser_missing")
+    return {"ok": True, "workspace": ws, "saved": saved, "skipped": skipped, "warnings": warnings, **stats}
 
 
 @router.get("/rag/search")
@@ -1797,6 +1926,357 @@ def workspace_stats(slug: str, request: Request):
     except Exception:
         pass
     return out
+
+
+@router.get("/workspaces/{slug}/corpus")
+def workspace_corpus_list(slug: str, request: Request, limit: int = 20):
+    """List recent corpus documents for a workspace (id, title, url, ts, meta excerpt).
+
+    Read-only; allows viewer/editor/admin when auth is enabled.
+    """
+    import sqlite3 as _sqlite3
+
+    settings = request.app.state.settings
+    # View permission sufficient for reads when auth is enabled
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    limit = max(1, min(200, int(limit or 20)))
+    # Resolve effective workspace paths by slug (do not rely solely on middleware state)
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    db_path = paths.get("db_path", settings.db_path)
+    con = _sqlite3.connect(db_path)
+    con.row_factory = _sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT id, ts, title, url, meta FROM corpus WHERE workspace = ? ORDER BY ts DESC LIMIT ?",
+            (slug, limit),
+        ).fetchall()
+        docs: list[dict[str, object]] = []
+        for r in rows:
+            # meta is stored as JSON; return raw string to keep payload small
+            docs.append(
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "url": r["url"],
+                    "ts": float(r["ts"]) if r["ts"] is not None else None,
+                    "meta": r["meta"],
+                }
+            )
+    finally:
+        con.close()
+    return {"workspace": slug, "docs": docs}
+
+
+@router.get("/workspaces/{slug}/corpus/files")
+def workspace_corpus_files(slug: str, request: Request, limit: int = 50):
+    """List recent files and their ingestion status from `corpus_files` for a workspace.
+
+    Filters paths under <docs_dir>/<workspace>. Returns: path, name, mtime, doc_id, status, reason, chunks, ext, size.
+    """
+    import sqlite3 as _sqlite3
+    import json as _json
+    from pathlib import Path as _Path
+
+    settings = request.app.state.settings
+    # View permission sufficient for reads when auth is enabled
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    limit = max(1, min(500, int(limit or 50)))
+    # Resolve effective workspace paths by slug (do not rely solely on middleware state)
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    docs_root = _Path(paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    ws_dir = (docs_root / slug).resolve()
+    db_path = paths.get("db_path", settings.db_path)
+    con = _sqlite3.connect(db_path)
+    con.row_factory = _sqlite3.Row
+    try:
+        # Ensure table exists (defensive)
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_files (
+              path TEXT PRIMARY KEY,
+              mtime REAL,
+              doc_id TEXT,
+              meta TEXT,
+              workspace TEXT
+            )
+            """
+        )
+        # Best-effort backfill of workspace for existing rows by path prefix
+        try:
+            like_pf = str(ws_dir) + "%"
+            con.execute(
+                "UPDATE corpus_files SET workspace = ? WHERE (workspace IS NULL OR workspace = '') AND path LIKE ?",
+                (slug, like_pf),
+            )
+            con.commit()
+        except Exception:
+            pass
+        # Filter by workspace first, then by path prefix as fallback
+        rows = con.execute(
+            "SELECT path, mtime, doc_id, meta, workspace FROM corpus_files WHERE workspace = ? ORDER BY mtime DESC LIMIT ?",
+            (slug, limit),
+        ).fetchall()
+        # If no results with workspace filter, fall back to path-based filtering
+        if not rows:
+            like = str(ws_dir) + "%"
+            rows = con.execute(
+                "SELECT path, mtime, doc_id, meta, workspace FROM corpus_files WHERE path LIKE ? ORDER BY mtime DESC LIMIT ?",
+                (like, limit),
+            ).fetchall()
+        files: list[dict[str, object]] = []
+        for r in rows:
+            meta_raw = r["meta"] or "{}"
+            try:
+                meta_obj = _json.loads(meta_raw)
+            except Exception:
+                meta_obj = {"raw": meta_raw}
+            name = _Path(str(r["path"])).name
+            files.append(
+                {
+                    "path": r["path"],
+                    "name": name,
+                    "mtime": float(r["mtime"]) if r["mtime"] is not None else None,
+                    "doc_id": r["doc_id"],
+                    "status": meta_obj.get("status"),
+                    "reason": meta_obj.get("reason"),
+                    "chunks": meta_obj.get("chunks"),
+                    "ext": meta_obj.get("ext"),
+                    "size": meta_obj.get("size"),
+                    "workspace": r["workspace"],
+                }
+            )
+    finally:
+        con.close()
+    return {"workspace": slug, "files": files}
+
+
+@router.get("/workspaces/{slug}/corpus/file")
+def workspace_corpus_file_detail(slug: str, request: Request, path: str, limit_chunks: int = 100):
+    """Return detail for a specific ingested file: status row and related corpus chunks.
+
+    The `path` must be an absolute path within <docs_dir>/<workspace>. Chunks are sourced from
+    `corpus` by matching the `url` column to `file:{path}` and filtering by workspace.
+    """
+    import sqlite3 as _sqlite3
+    import json as _json
+    from pathlib import Path as _Path
+
+    settings = request.app.state.settings
+    # View permission sufficient for reads when auth is enabled
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    # Resolve effective workspace paths and safety-check: path must be under docs_dir/<workspace>
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    docs_root = _Path(paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    ws_dir = (docs_root / slug).resolve()
+    p = _Path(path).resolve()
+    if ws_dir not in p.parents and ws_dir != p:
+        return JSONResponse(status_code=400, content={"error": "path_out_of_workspace"})
+    limit_chunks = max(1, min(500, int(limit_chunks or 100)))
+    db_path = paths.get("db_path", getattr(request.state, "db_path", settings.db_path))
+    con = _sqlite3.connect(db_path)
+    con.row_factory = _sqlite3.Row
+    try:
+        # Fetch file status
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_files (
+              path TEXT PRIMARY KEY,
+              mtime REAL,
+              doc_id TEXT,
+              meta TEXT,
+              workspace TEXT
+            )
+            """
+        )
+        rowf = con.execute(
+            "SELECT path, mtime, doc_id, meta FROM corpus_files WHERE path = ?",
+            (str(p),),
+        ).fetchone()
+        file_info = None
+        if rowf:
+            try:
+                meta_obj = _json.loads(rowf["meta"] or "{}")
+            except Exception:
+                meta_obj = {"raw": rowf["meta"]}
+            file_info = {
+                "path": rowf["path"],
+                "name": _Path(str(rowf["path"])).name,
+                "mtime": float(rowf["mtime"]) if rowf["mtime"] is not None else None,
+                "doc_id": rowf["doc_id"],
+                "status": meta_obj.get("status"),
+                "reason": meta_obj.get("reason"),
+                "chunks": meta_obj.get("chunks"),
+                "ext": meta_obj.get("ext"),
+                "size": meta_obj.get("size"),
+            }
+        # Fetch related corpus chunks
+        url = f"file:{str(p)}"
+        rows = con.execute(
+            "SELECT id, ts, title, url, text, meta FROM corpus WHERE workspace = ? AND url = ? ORDER BY ts ASC LIMIT ?",
+            (slug, url, limit_chunks),
+        ).fetchall()
+        chunks = []
+        for r in rows:
+            try:
+                meta = _json.loads(r["meta"] or "{}")
+            except Exception:
+                meta = {}
+            ci = meta.get("chunk_index")
+            ct = meta.get("chunk_total")
+            text = r["text"] or ""
+            snippet = (text[:480]) if text else ""
+            chunks.append(
+                {
+                    "id": r["id"],
+                    "ts": float(r["ts"]) if r["ts"] is not None else None,
+                    "title": r["title"],
+                    "snippet": snippet,
+                    "chunk_index": ci,
+                    "chunk_total": ct,
+                    "meta": meta,
+                }
+            )
+        chunks.sort(key=lambda x: (x["chunk_index"] if isinstance(x.get("chunk_index"), int) else 1e9))
+    finally:
+        con.close()
+    summary = {
+        "chunks": len(chunks),
+        "first_snippet": chunks[0]["snippet"] if chunks else "",
+    }
+    return {"workspace": slug, "file": file_info, "chunks": chunks, "summary": summary}
+
+
+@router.get("/workspaces/{slug}/corpus/files/history")
+def workspace_corpus_files_history(slug: str, request: Request, limit: int = 100):
+    """List recent file ingestion events from corpus_files_history for a workspace."""
+    import sqlite3 as _sqlite3
+    import os as _os
+    settings = request.app.state.settings
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    limit = max(1, min(1000, int(limit or 100)))
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    db_path = paths.get("db_path", getattr(request.state, "db_path", settings.db_path))
+    con = _sqlite3.connect(db_path)
+    con.row_factory = _sqlite3.Row
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_files_history (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              path TEXT,
+              mtime REAL,
+              ts REAL,
+              doc_id TEXT,
+              status TEXT,
+              reason TEXT,
+              ext TEXT,
+              size INTEGER,
+              workspace TEXT
+            )
+            """
+        )
+        rows = con.execute(
+            "SELECT id, path, mtime, ts, doc_id, status, reason, ext, size FROM corpus_files_history WHERE workspace = ? ORDER BY ts DESC LIMIT ?",
+            (slug, limit),
+        ).fetchall()
+        events = []
+        for r in rows:
+            events.append(
+                {
+                    "id": r["id"],
+                    "path": r["path"],
+                    "name": _os.path.basename(r["path"]) if r["path"] else "",
+                    "mtime": float(r["mtime"]) if r["mtime"] is not None else None,
+                    "ts": float(r["ts"]) if r["ts"] is not None else None,
+                    "doc_id": r["doc_id"],
+                    "status": r["status"],
+                    "reason": r["reason"],
+                    "ext": r["ext"],
+                    "size": r["size"],
+                }
+            )
+    finally:
+        con.close()
+    return {"workspace": slug, "events": events}
+
+
+@router.get("/workspaces/{slug}/corpus/file/history")
+def workspace_corpus_file_history(slug: str, request: Request, path: str, limit: int = 200):
+    """List history events for a specific file path within a workspace."""
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+    settings = request.app.state.settings
+    try:
+        _require_role(request, {"admin", "editor", "viewer"})
+    except HTTPException:
+        if getattr(settings, "auth_required", False):
+            raise
+    # Resolve effective workspace paths and safety-check
+    paths = ws_resolve_paths(settings.db_path, slug, settings)
+    docs_root = _Path(paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    ws_dir = (docs_root / slug).resolve()
+    p = _Path(path).resolve()
+    if ws_dir not in p.parents and ws_dir != p:
+        return JSONResponse(status_code=400, content={"error": "path_out_of_workspace"})
+    limit = max(1, min(1000, int(limit or 200)))
+    db_path = paths.get("db_path", getattr(request.state, "db_path", settings.db_path))
+    con = _sqlite3.connect(db_path)
+    con.row_factory = _sqlite3.Row
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_files_history (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              path TEXT,
+              mtime REAL,
+              ts REAL,
+              doc_id TEXT,
+              status TEXT,
+              reason TEXT,
+              ext TEXT,
+              size INTEGER,
+              workspace TEXT
+            )
+            """
+        )
+        rows = con.execute(
+            "SELECT id, path, mtime, ts, doc_id, status, reason, ext, size FROM corpus_files_history WHERE workspace = ? AND path = ? ORDER BY ts DESC LIMIT ?",
+            (slug, str(p), limit),
+        ).fetchall()
+        events = []
+        for r in rows:
+            events.append(
+                {
+                    "id": r["id"],
+                    "path": r["path"],
+                    "mtime": float(r["mtime"]) if r["mtime"] is not None else None,
+                    "ts": float(r["ts"]) if r["ts"] is not None else None,
+                    "doc_id": r["doc_id"],
+                    "status": r["status"],
+                    "reason": r["reason"],
+                    "ext": r["ext"],
+                    "size": r["size"],
+                }
+            )
+    finally:
+        con.close()
+    return {"workspace": slug, "path": str(p), "events": events}
 
 
 class WorkspaceDeleteRequest(BaseModel):
@@ -2146,6 +2626,7 @@ def evals_run(request: Request, body: Dict[str, Any]):
         tool_budget_per_turn=tb_turn,
         max_refinements=max_refinements,
         use_cp_decision=use_cp_decision,
+        llm_enabled=bool(body.get("llm_enabled", False)),
     )
 
     metrics = suite_summarize_records(records)
@@ -2239,6 +2720,224 @@ def evals_suites(request: Request):
         for s in eval_list_suites()
     ]
     return {"suites": suites}
+
+
+@router.get("/evals/env")
+def evals_env(request: Request):
+    """Report whether real LLM generation is available on this server.
+
+    This checks for pydantic_ai + openai client importability and the presence of
+    an OpenAI API key in the environment. It does not make a network call.
+    """
+    import importlib
+    import os as _os
+    ok_pai = False
+    ok_openai = False
+    try:
+        importlib.import_module("pydantic_ai")
+        ok_pai = True
+    except Exception:
+        ok_pai = False
+    try:
+        importlib.import_module("openai")
+        ok_openai = True
+    except Exception:
+        ok_openai = False
+    key_present = bool(_os.getenv("OPENAI_API_KEY"))
+    embedding_backend = _os.getenv("UAMM_EMBEDDING_BACKEND", "openai").lower()
+    return {
+        "llm_available": bool(ok_pai and ok_openai and key_present),
+        "openai_key": bool(key_present),
+        "embedding_backend": embedding_backend,
+    }
+
+
+@router.get("/evals/run/stream")
+def evals_run_stream(request: Request, suites: str, update_cp: bool = True, llm: bool = False, run_id: str | None = None) -> Response:
+    """Stream per-item progress for one or more suites via SSE.
+
+    Query params:
+    - suites: comma-separated suite IDs (e.g., CP-B1,Stack-G1)
+    - update_cp: when true, write CP artifacts for suites that record them
+    - llm: when true, attempt real LLM generation if available
+    - run_id: optional run id label (else auto)
+    """
+    ids = [s.strip() for s in (suites or "").split(",") if s.strip()]
+    if not ids:
+        return JSONResponse(status_code=400, content={"error": "missing suites"})
+    settings = request.app.state.settings
+    rid = run_id or f"run-{int(time.time())}"
+
+    def se(evt: str, data: Dict[str, Any]) -> str:
+        return _sse_event(evt, data)
+
+    def gen():
+        yield se("ready", {"run_id": rid})
+        for sid in ids:
+            try:
+                suite = eval_get_suite(sid)
+            except KeyError:
+                yield se("error", {"suite_id": sid, "message": "unknown_suite"})
+                continue
+            items = eval_load_items(suite.dataset_path)
+            yield se("suite_start", {"suite_id": sid, "label": suite.label, "total": len(items)})
+            recs: list[dict] = []
+            for idx, item in enumerate(items, start=1):
+                # Run single-item eval for immediate result
+                rs = run_evals(
+                    items=[item],
+                    accept_threshold=settings.accept_threshold,
+                    cp_enabled=suite.cp_enabled,
+                    tool_budget_per_refinement=suite.tool_budget_per_refinement,
+                    tool_budget_per_turn=suite.tool_budget_per_turn,
+                    max_refinements=suite.max_refinements,
+                    use_cp_decision=suite.use_cp_decision,
+                    llm_enabled=llm,
+                )
+                rec = rs[0] if rs else {}
+                recs.append(rec)
+                # Incremental metrics
+                m = suite_summarize_records(recs)
+                yield se("item", {"suite_id": sid, "index": idx, "record": rec, "metrics": m, "total": len(items)})
+            # Finalize suite
+            metrics = suite_summarize_records(recs)
+            by_dom = suite_summarize_by_domain(recs)
+            # Persist run + optional CP artifacts
+            try:
+                store_eval_run(
+                    settings.db_path,
+                    run_id=rid,
+                    suite_id=sid,
+                    metrics=metrics,
+                    by_domain=by_dom,
+                    records=recs,
+                    notes={"type": "suite"},
+                )
+                if update_cp and suite.record_cp_artifacts:
+                    total_inserted = 0
+                    refs: Dict[str, Any] = {}
+                    grouped: Dict[str, list[dict]] = {}
+                    for r in recs:
+                        dom = str(r.get("domain", "default"))
+                        grouped.setdefault(dom, []).append(r)
+                    for dom, rs in grouped.items():
+                        tuples = [(float(r["S"]), bool(r["accepted"]), bool(r["correct"])) for r in rs]
+                        total_inserted += cp_store.add_artifacts(settings.db_path, run_id=rid, domain=dom, items=tuples)
+                        tau = cp_store.compute_threshold(settings.db_path, domain=dom, target_mis=settings.cp_target_mis)
+                        stats_dom = cp_store.domain_stats(settings.db_path, domain=dom).get(dom, {})
+                        quantiles = quantiles_from_scores([float(r["S"]) for r in rs], DRIFT_QUANTILES)
+                        upsert_reference(settings.db_path, domain=dom, run_id=rid, target_mis=settings.cp_target_mis, tau=tau, stats=stats_dom, snne_quantiles=quantiles)
+                        refs[dom] = {"tau": tau, "stats": stats_dom, "quantiles": quantiles}
+            except Exception:
+                pass
+            yield se("suite_done", {"suite_id": sid, "metrics": metrics, "by_domain": by_dom, "count": len(recs)})
+        yield se("final", {"run_id": rid, "suites": ids})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.get("/evals/run/adhoc/stream")
+def evals_run_adhoc_stream(
+    request: Request,
+    items: str,
+    run_id: str | None = None,
+    domain: str | None = None,
+    max_refinements: int = 0,
+    tool_budget_per_turn: int = 0,
+    tool_budget_per_refinement: int = 0,
+    cp_enabled: bool = False,
+    use_cp_decision: bool | None = None,
+    llm: bool = False,
+    suite_name: str | None = "adhoc",
+    record_cp: bool = False,
+) -> Response:
+    """Stream ad-hoc eval items via SSE.
+
+    Query params:
+    - items: JSON-encoded array of {question, domain, correct}
+    - run_id: optional run id label (else auto)
+    - domain: optional default domain to apply when missing in items
+    - max_refinements/tool_budget_*: planning controls
+    - cp_enabled/use_cp_decision: CP gating behaviour
+    - llm: when true, attempt real LLM generation if available
+    - suite_name: stored label for this ad-hoc run (default 'adhoc')
+    - record_cp: when true, persist CP artifacts and update references
+    """
+    try:
+        parsed = json.loads(items)
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid items json"})
+    if not isinstance(parsed, list) or not all(isinstance(x, dict) for x in parsed):
+        return JSONResponse(status_code=400, content={"error": "items must be a JSON array of objects"})
+    settings = request.app.state.settings
+    rid = run_id or f"run-{int(time.time())}"
+
+    # Normalize items with default domain fallback
+    norm_items: list[dict[str, Any]] = []
+    for it in parsed:
+        entry = dict(it)
+        if domain and not entry.get("domain"):
+            entry["domain"] = str(domain)
+        if not entry.get("domain"):
+            entry["domain"] = "default"
+        norm_items.append(entry)
+
+    def se(evt: str, data: Dict[str, Any]) -> str:
+        return _sse_event(evt, data)
+
+    def gen():
+        yield se("ready", {"run_id": rid, "count": len(norm_items)})
+        recs: list[dict] = []
+        for idx, item in enumerate(norm_items, start=1):
+            rs = run_evals(
+                items=[item],
+                accept_threshold=settings.accept_threshold,
+                cp_enabled=cp_enabled,
+                tool_budget_per_refinement=tool_budget_per_refinement,
+                tool_budget_per_turn=tool_budget_per_turn,
+                max_refinements=max_refinements,
+                use_cp_decision=use_cp_decision,
+                llm_enabled=llm,
+            )
+            rec = rs[0] if rs else {}
+            recs.append(rec)
+            # Incremental metrics
+            m = suite_summarize_records(recs)
+            yield se("item", {"index": idx, "record": rec, "metrics": m, "total": len(norm_items)})
+        # Finalize and persist
+        metrics = suite_summarize_records(recs)
+        by_dom = suite_summarize_by_domain(recs)
+        try:
+            store_eval_run(
+                settings.db_path,
+                run_id=rid,
+                suite_id=suite_name or "adhoc",
+                metrics=metrics,
+                by_domain=by_dom,
+                records=recs,
+                notes={"type": "custom", "item_count": len(recs)},
+            )
+            if record_cp:
+                total_inserted = 0
+                refs: Dict[str, Any] = {}
+                grouped: Dict[str, list[dict]] = {}
+                for r in recs:
+                    dom = str(r.get("domain", "default"))
+                    grouped.setdefault(dom, []).append(r)
+                for dom, rs in grouped.items():
+                    tuples = [(float(r["S"]), bool(r["accepted"]), bool(r["correct"])) for r in rs]
+                    total_inserted += cp_store.add_artifacts(settings.db_path, run_id=rid, domain=dom, items=tuples)
+                    tau = cp_store.compute_threshold(settings.db_path, domain=dom, target_mis=settings.cp_target_mis)
+                    stats_dom = cp_store.domain_stats(settings.db_path, domain=dom).get(dom, {})
+                    quantiles = quantiles_from_scores([float(r["S"]) for r in rs], DRIFT_QUANTILES)
+                    upsert_reference(settings.db_path, domain=dom, run_id=rid, target_mis=settings.cp_target_mis, tau=tau, stats=stats_dom, snne_quantiles=quantiles)
+                    refs[dom] = {"tau": tau, "stats": stats_dom, "quantiles": quantiles}
+        except Exception:
+            # Persist errors are non-fatal for streaming
+            pass
+        yield se("final", {"run_id": rid, "metrics": metrics, "by_domain": by_dom, "count": len(recs)})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @router.get("/evals/runs")

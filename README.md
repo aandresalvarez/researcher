@@ -18,7 +18,9 @@ Quick start
   - Activate venv:
     - macOS/Linux: `source .venv/bin/activate`
     - Windows PowerShell: `.\\.venv\\Scripts\\Activate.ps1`
-  - Install: `make install` (optional: `make install-vector` for vectors, `make install-ingest` for PDF/DOCX, `make install-ocr` for OCR, `make install-chunk` for tiktoken)
+  - Install: `make install`
+    - Optional: `make install-vector` (vector backends), `make install-chunk` (tiktoken), `make install-gcp` (GCS tools).
+    - Note: PDF/DOCX parsing and OCR client libraries are installed by default. For OCR of scanned PDFs, system binaries are still required: poppler and tesseract.
   - Run server: `make run`
   - Open docs: http://127.0.0.1:8000/docs
 
@@ -48,6 +50,19 @@ Configuration (basics)
   - `tools_requiring_approval` — e.g. `["WEB_FETCH", "TABLE_QUERY"]`
   - `table_allowed` — tables that SQL queries may read from (read‑only)
 - Environment variables override YAML. Put local values in `.env`.
+
+UI (Web Components)
+- The built‑in UI under `/ui/*` is implemented with native Web Components (no build tools):
+  - Components live in `src/uamm/api/static/js/components/` and are loaded as ES modules.
+  - Core helpers (`apiFetch`, `sse`, `getContext/setContext`, debug) live in `src/uamm/api/static/js/core/`.
+  - Pages are composed as islands in Jinja templates (e.g., `<uamm-playground>`, `<uamm-obs-page>`, `<uamm-rag-page>`, `<uamm-cp-page>`, `<uamm-evals-page>`, `<uamm-home-page>`, `<uamm-workspaces-page>`).
+  - Styling is Bootstrap 5; components render in light DOM to inherit styles.
+- Dev notes:
+  - No bundler required. Modules are served statically from `/static/js`.
+  - Debug logging: set `localStorage['uamm.debug']=1`; optional event overlay: `localStorage['uamm.devtools']=1`.
+  - Context (workspace, key) persists in localStorage and is exposed via `getContext()`.
+  - To develop only the UI, run the API and edit modules under `static/js`; the browser loads ES modules directly.
+  - Minimal globals remain for the context modal: `window.ctxSave`, `window.ctxListWorkspaces`, `window.showToast`.
 
 Secrets (simple)
 - For local use, set env vars (e.g., `OPENAI_API_KEY`) in `.env`.
@@ -186,12 +201,16 @@ Notes
 - Python version for dev is 3.14 (see `.python-version`).
 - Optional extras
   - Vectors: `make install-vector`
-  - Ingest (PDF/DOCX): `make install-ingest`
-  - OCR: `make install-ocr`
   - Chunking: `make install-chunk`
   - Tables (pdfplumber): `uv pip install -e .[tables]`
   - Units (pint): `uv pip install -e .[units]`
   - Formal (pint + z3): `uv pip install -e .[formal]`
+
+OCR system requirements
+- macOS: `brew install poppler tesseract`
+- Ubuntu/Debian: `sudo apt-get install poppler-utils tesseract-ocr`
+
+These binaries are needed for converting PDF pages to images (poppler) and running OCR (tesseract). The Python packages are installed by default.
 
 FAQ
 - Which UQ method? SNNE with quantile‑based calibration and logistic fallback.

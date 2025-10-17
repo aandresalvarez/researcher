@@ -8,6 +8,4 @@ def test_ui_rag_renders():
     with TestClient(app) as client:
         res = client.get("/ui/rag")
         assert res.status_code == 200
-        assert b"Upload File" in res.content
-        assert b"Ingest Folder" in res.content
-        assert b"Search Corpus" in res.content
+        assert b"<uamm-rag-page" in res.content

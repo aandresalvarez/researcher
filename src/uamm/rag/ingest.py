@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
+import time
 from typing import Dict, Optional, Tuple
 
 from uamm.rag.corpus import add_doc as rag_add_doc
@@ -11,6 +12,7 @@ from uamm.rag.vector_store import (
     upsert_document_embedding,
 )
 from uamm.rag.ingest_tables import extract_pdf_tables
+import json
 from uamm.security.redaction import redact
 import logging
 
@@ -213,7 +215,8 @@ def _ensure_corpus_files_table(db_path: str) -> None:
               path TEXT PRIMARY KEY,
               mtime REAL,
               doc_id TEXT,
-              meta TEXT
+              meta TEXT,
+              workspace TEXT
             )
             """
         )
@@ -222,25 +225,224 @@ def _ensure_corpus_files_table(db_path: str) -> None:
         con.close()
 
 
+def _ensure_corpus_files_history_table(db_path: str) -> None:
+    con = sqlite3.connect(db_path, check_same_thread=False)
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_files_history (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              path TEXT,
+              mtime REAL,
+              ts REAL,
+              doc_id TEXT,
+              status TEXT,
+              reason TEXT,
+              ext TEXT,
+              size INTEGER,
+              workspace TEXT
+            )
+            """
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _record_file_event(
+    db_path: str,
+    *,
+    path: Path,
+    mtime: float,
+    status: str,
+    reason: str | None,
+    ext: str,
+    size: int,
+    workspace: str | None,
+    doc_id: str | None = None,
+) -> None:
+    try:
+        _ensure_corpus_files_history_table(db_path)
+        con = sqlite3.connect(db_path, check_same_thread=False)
+        try:
+            con.execute(
+                "INSERT INTO corpus_files_history(path, mtime, ts, doc_id, status, reason, ext, size, workspace) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(path),
+                    float(mtime),
+                    float(time.time()),
+                    doc_id,
+                    status,
+                    reason or "",
+                    ext,
+                    int(size or 0),
+                    workspace or "",
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass
+
+
 def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]:
     """Ingest a single file into the RAG corpus; returns doc_id or None if skipped.
 
-    Skips unknown extensions and oversized files. When vector backend is enabled,
-    stores an embedding for dense search.
+    Records per-file status in `corpus_files` meta with keys like
+    {"status": "ready|skipped", "reason": "...", "chunks": N, "ext": ".pdf", "size": bytes}.
+    When vector backend is enabled, stores an embedding for dense search.
     """
     path = Path(file_path)
-    payload = _read_file_text(path)
+    try:
+        size = path.stat().st_size
+    except Exception:
+        size = 0
+    ext = path.suffix.lower()
+
+    # Attempt to parse
+    payload: Optional[Tuple[str, str]] = None
+    reason: Optional[str] = None
+    if not path.is_file():
+        reason = "not_file"
+    elif ext not in ALLOWED_EXTS:
+        reason = "ext_not_allowed"
+    else:
+        try:
+            if size > MAX_FILE_BYTES:
+                reason = "too_large"
+            else:
+                if ext == ".pdf":
+                    try:
+                        from pypdf import PdfReader  # type: ignore
+                    except Exception:
+                        reason = "pdf_parser_missing"
+                    if reason is None:
+                        try:
+                            reader = PdfReader(str(path))
+                            parts = []
+                            for page in reader.pages:
+                                try:
+                                    parts.append(page.extract_text() or "")
+                                except Exception:
+                                    continue
+                            text = "\n\n".join(p.strip() for p in parts if p and p.strip())
+                            if text and text.strip():
+                                payload = (path.stem, text)
+                            else:
+                                reason = "pdf_no_text"
+                        except Exception:
+                            reason = "pdf_parse_failed"
+                    # OCR fallback for scanned PDFs
+                    if payload is None and getattr(settings, "docs_ocr_enabled", True):
+                        try:
+                            ocr_text = _ocr_pdf(path)
+                        except Exception:
+                            ocr_text = None
+                        if ocr_text and ocr_text.strip():
+                            payload = (path.stem, ocr_text)
+                            reason = None
+                        else:
+                            if reason in (None, "pdf_no_text"):
+                                reason = "ocr_failed_or_missing"
+                elif ext == ".docx":
+                    try:
+                        import docx  # type: ignore
+                    except Exception:
+                        reason = "docx_parser_missing"
+                    if reason is None:
+                        try:
+                            doc = docx.Document(str(path))  # type: ignore[attr-defined]
+                            parts = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+                            text = "\n\n".join(parts)
+                            if text and text.strip():
+                                payload = (path.stem, text)
+                            else:
+                                reason = "docx_no_text"
+                        except Exception:
+                            reason = "docx_parse_failed"
+                else:
+                    # Plain text and HTML
+                    try:
+                        raw = path.read_text(encoding="utf-8", errors="ignore")
+                        title = path.stem
+                        if ext in {".html", ".htm"}:
+                            text = re.sub(r"<[^>]+>", " ", raw)
+                        else:
+                            text = raw
+                        payload = (title, text)
+                        reason = None
+                    except Exception:
+                        reason = "read_failed"
+        except Exception:
+            # Unknown failure reading file
+            if reason is None:
+                reason = "read_failed"
+
     if payload is None:
-        # Fallback to OCR for PDF if enabled
-        if (
-            getattr(settings, "docs_ocr_enabled", True)
-            and path.suffix.lower() == ".pdf"
-        ):
-            text = _ocr_pdf(path)
-            if text and text.strip():
-                payload = (path.stem, text)
-        if payload is None:
-            return None
+        # Record skipped status
+        try:
+            _ensure_corpus_files_table(db_path)
+            con = sqlite3.connect(db_path, check_same_thread=False)
+            try:
+                mtime = path.stat().st_mtime
+            except Exception:
+                mtime = 0.0
+            try:
+                meta_blob = json.dumps(
+                    {
+                        "status": "skipped",
+                        "reason": reason or "unknown",
+                        "chunks": 0,
+                        "ext": ext,
+                        "size": int(size or 0),
+                    },
+                    separators=(",", ":"),
+                )
+                con.execute(
+                    "INSERT OR REPLACE INTO corpus_files(path, mtime, doc_id, meta, workspace) VALUES (?, ?, ?, ?, ?)",
+                    (str(path), mtime, None, meta_blob, getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else "default"),
+                )
+                con.commit()
+            finally:
+                con.close()
+            _record_file_event(
+                db_path,
+                path=path,
+                mtime=mtime,
+                status="skipped",
+                reason=reason,
+                ext=ext,
+                size=int(size or 0),
+                workspace=(
+                    getattr(settings, "workspace", getattr(settings, "default_workspace", "default"))
+                    if settings
+                    else "default"
+                ),
+                doc_id=None,
+            )
+            try:
+                logging.getLogger("uamm.rag.ingest").info(
+                    "corpus_file_status",
+                    extra={
+                        "path": str(path),
+                        "status": "skipped",
+                        "reason": reason or "unknown",
+                        "chunks": 0,
+                        "ext": ext,
+                        "size": int(size or 0),
+                        "workspace": getattr(
+                            settings,
+                            "workspace",
+                            getattr(settings, "default_workspace", "default") if settings else "default",
+                        ),
+                    },
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return None
     title, text = payload
     # Redact before persisting
     text, _ = redact(text)
@@ -334,17 +536,64 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
     _ensure_corpus_files_table(db_path)
     con = sqlite3.connect(db_path, check_same_thread=False)
     try:
-        mtime = path.stat().st_mtime
-        # Store the first chunk id and a small meta payload
-        meta_blob = "{" + f'"chunks":{len(chunk_ids)}' + "}"
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        meta_blob = json.dumps(
+            {
+                "status": "ready",
+                "reason": "",
+                "chunks": len(chunk_ids),
+                "ext": ext,
+                "size": int(size or 0),
+            },
+            separators=(",", ":"),
+        )
         con.execute(
-            "INSERT OR REPLACE INTO corpus_files(path, mtime, doc_id, meta) VALUES (?, ?, ?, ?)",
-            (str(path), mtime, first_id, meta_blob),
+            "INSERT OR REPLACE INTO corpus_files(path, mtime, doc_id, meta, workspace) VALUES (?, ?, ?, ?, ?)",
+            (str(path), mtime, first_id, meta_blob, getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else "default"),
         )
         con.commit()
     finally:
         con.close()
 
+    _record_file_event(
+        db_path,
+        path=path,
+        mtime=mtime,
+        status="ready",
+        reason="",
+        ext=ext,
+        size=int(size or 0),
+        workspace=(
+            getattr(settings, "workspace", getattr(settings, "default_workspace", "default"))
+            if settings
+            else "default"
+        ),
+        doc_id=first_id,
+    )
+
+    try:
+        logging.getLogger("uamm.rag.ingest").info(
+            "corpus_file_status",
+            extra={
+                "path": str(path),
+                "status": "ready",
+                "reason": "",
+                "chunks": len(chunk_ids),
+                "ext": ext,
+                "size": int(size or 0),
+                "doc_id": first_id,
+                "workspace": getattr(
+                    settings,
+                    "workspace",
+                    getattr(settings, "default_workspace", "default") if settings else "default",
+                ),
+            },
+        )
+    except Exception:
+        pass
     return first_id
 
 

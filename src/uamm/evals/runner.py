@@ -14,6 +14,7 @@ def run_evals(
     tool_budget_per_turn: int = 0,
     max_refinements: int = 0,
     use_cp_decision: bool | None = None,
+    llm_enabled: bool | None = None,
 ) -> List[Dict[str, Any]]:
     """Run a lightweight eval and return structured records per item.
 
@@ -32,7 +33,7 @@ def run_evals(
     """
     results: List[Dict[str, Any]] = []
     policy = PolicyConfig(tau_accept=accept_threshold, delta=0.0)
-    agent = MainAgent(cp_enabled=cp_enabled, policy=policy)
+    agent = MainAgent(cp_enabled=cp_enabled, policy=policy, llm_enabled=bool(llm_enabled))
     settings = load_settings()
     for it in items:
         q = str(it.get("question", ""))
