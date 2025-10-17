@@ -1510,7 +1510,8 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
     allowed_roots = {configured, ws_dir}
     def _is_within(child: Path, parent: Path) -> bool:
         try:
-            child = child.resolve(); parent = parent.resolve()
+            child = child.resolve()
+            parent = parent.resolve()
         except Exception:
             return False
         return parent == child or parent in child.parents
@@ -1534,11 +1535,11 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
     # Environment warnings (parsers/ocr availability)
     warnings: list[str] = []
     try:
-        import pypdf  # type: ignore
+        import pypdf  # type: ignore  # noqa: F401
     except Exception:
         warnings.append("pdf_parser_missing")
     try:
-        import docx  # type: ignore
+        import docx  # type: ignore  # noqa: F401
     except Exception:
         warnings.append("docx_parser_missing")
     try:
@@ -1612,7 +1613,7 @@ async def rag_upload_file(
         warnings.append("unsupported_extension")
     if ext == ".pdf":
         try:
-            import pypdf  # type: ignore
+            import pypdf  # type: ignore  # noqa: F401
         except Exception:
             warnings.append("pdf_parser_missing")
         try:
@@ -1624,7 +1625,7 @@ async def rag_upload_file(
                 warnings.append("ocr_deps_missing")
     if ext == ".docx":
         try:
-            import docx  # type: ignore
+            import docx  # type: ignore  # noqa: F401
         except Exception:
             warnings.append("docx_parser_missing")
     eff_db = getattr(request.state, "db_path", None) or settings.db_path
@@ -1677,7 +1678,7 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
         warnings.append("unsupported_extension")
     if seen_pdf:
         try:
-            import pypdf  # type: ignore
+            import pypdf  # type: ignore  # noqa: F401
         except Exception:
             warnings.append("pdf_parser_missing")
         try:
@@ -1689,7 +1690,7 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
                 warnings.append("ocr_deps_missing")
     if seen_docx:
         try:
-            import docx  # type: ignore
+            import docx  # type: ignore  # noqa: F401
         except Exception:
             warnings.append("docx_parser_missing")
     return {"ok": True, "workspace": ws, "saved": saved, "skipped": skipped, "warnings": warnings, **stats}
