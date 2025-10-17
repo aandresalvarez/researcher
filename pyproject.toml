@@ -3,7 +3,7 @@ name = "uamm"
 version = "0.1.0"
 description = "Uncertainty-Aware Agent with Modular Memory (UAMM)"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "UAMM Team" }]
 dependencies = [
@@ -18,14 +18,7 @@ dependencies = [
   "PyYAML>=6.0.0",
   "jinja2>=3.1.0",
   "pytest>=8.0.0",
-  "pytest-cov>=4.1.0",
-  # Always-on ingest deps (PDF/DOCX)
-  "pypdf>=5.0.0",
-  "python-docx>=1.1.0",
-  # Always-on OCR client libs (runtime still requires system poppler & tesseract)
-  "pytesseract>=0.3.10",
-  "pdf2image>=1.17.0",
-  "pillow>=10.0.0"
+  "pytest-cov>=4.1.0"
 ]
 
 [project.optional-dependencies]

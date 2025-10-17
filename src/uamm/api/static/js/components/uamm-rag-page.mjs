@@ -11,48 +11,48 @@ export class UammRagPage extends HTMLElement {
   connectedCallback(){
     if (this._mounted) return; this._mounted = true;
     this.innerHTML = this._template();
-    
+
     // Subscribe to store for ingested files
     this._ingestedUnsub = select(selectRagIngested, (data) => {
       if (!data.loading) this._renderIngested(data.items);
     });
-    
+
     // Subscribe to store for file status
     this._statusUnsub = select(selectRagStatus, (data) => {
       if (!data.loading) this._renderFileStatus(data.items);
     });
-    
+
     // Upload handled by <uamm-rag-upload>; listen for completion
-    try{ 
-      this._uploadHandler = () => { 
-        this._refreshSidebarCounts(); 
+    try{
+      this._uploadHandler = () => {
+        this._refreshSidebarCounts();
         // Add a small delay to allow backend processing
         setTimeout(() => {
-          loadIngested(); 
-          loadFileStatus(); 
+          loadIngested();
+          loadFileStatus();
         }, 1000);
-      }; 
-      document.addEventListener(EV.RAG_UPLOAD_DONE, this._uploadHandler); 
+      };
+      document.addEventListener(EV.RAG_UPLOAD_DONE, this._uploadHandler);
     }catch(_){ }
     this._on('#ingest-form', 'submit', (e) => this.ingestFolder(e));
     this._on('#search-form', 'submit', (e) => this.searchCorpus(e));
     try{ this._wsHandler = () => { loadIngested(); loadFileStatus(); }; document.addEventListener(EV.WORKSPACE_CHANGE, this._wsHandler); document.addEventListener(EV.CONTEXT_CHANGE, this._wsHandler); }catch(_){ }
-    
+
     // Trigger initial loads via actions
     loadIngested().catch(()=>{});
     loadFileStatus().catch(()=>{});
   }
 
-  disconnectedCallback(){ 
+  disconnectedCallback(){
     this._mounted = false;
     // Unsubscribe from store
     if (this._ingestedUnsub) { try { this._ingestedUnsub(); } catch(_){} this._ingestedUnsub = null; }
     if (this._statusUnsub) { try { this._statusUnsub(); } catch(_){} this._statusUnsub = null; }
-    try{ 
-      if(this._wsHandler) document.removeEventListener(EV.WORKSPACE_CHANGE, this._wsHandler); 
-      if(this._wsHandler) document.removeEventListener(EV.CONTEXT_CHANGE, this._wsHandler); 
+    try{
+      if(this._wsHandler) document.removeEventListener(EV.WORKSPACE_CHANGE, this._wsHandler);
+      if(this._wsHandler) document.removeEventListener(EV.CONTEXT_CHANGE, this._wsHandler);
       if(this._uploadHandler) document.removeEventListener(EV.RAG_UPLOAD_DONE, this._uploadHandler);
-    }catch(_){ } 
+    }catch(_){ }
   }
 
   _template(){

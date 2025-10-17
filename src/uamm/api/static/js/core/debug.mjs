@@ -86,4 +86,3 @@ function getFlag(name) {
 function safeJSON(v) {
   try { return JSON.stringify(v); } catch (_) { return String(v); }
 }
-

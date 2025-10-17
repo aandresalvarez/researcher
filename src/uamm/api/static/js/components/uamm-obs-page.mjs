@@ -59,9 +59,9 @@ export class UammObsPage extends HTMLElement {
     }catch(_){}
   }
 
-  disconnectedCallback(){ 
-    if (this._autoId) { clearInterval(this._autoId); this._autoId = null; } 
-    this._mounted = false; 
+  disconnectedCallback(){
+    if (this._autoId) { clearInterval(this._autoId); this._autoId = null; }
+    this._mounted = false;
     if (this._metricsUnsub) { try { this._metricsUnsub(); } catch(_){} this._metricsUnsub=null; }
     if (this._stepsUnsub) { try { this._stepsUnsub(); } catch(_){} this._stepsUnsub=null; }
     if (this._wsHandler) {

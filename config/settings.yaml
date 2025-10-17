@@ -1,6 +1,7 @@
 # Default configuration (align with PRD §E Config table)
 
 stream_default: true
+profile: core  # core|minimal|full (core reduces defaults & background tasks)
 uq_mode: snne
 snne_samples: 5
 snne_tau: 0.3
@@ -52,3 +53,4 @@ egress_allowlist_hosts: []
 egress_denylist_hosts: []
 approvals_ttl_seconds: 1800
 tools_requiring_approval: []
+docs_auto_ingest: false  # default-off; enable explicitly when needed

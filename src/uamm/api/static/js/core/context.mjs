@@ -71,4 +71,3 @@ export function initContext() {
     emit(document, EV.CONTEXT_CHANGE, getContext());
   }
 }
-

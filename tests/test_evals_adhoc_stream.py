@@ -25,7 +25,11 @@ def test_evals_adhoc_stream_basic(monkeypatch, tmp_path):
 
         items = [
             {"question": "What is SNNE?", "correct": True, "domain": "default"},
-            {"question": "Provide a metric sample.", "correct": False, "domain": "analytics"},
+            {
+                "question": "Provide a metric sample.",
+                "correct": False,
+                "domain": "analytics",
+            },
         ]
         q = json.dumps(items)
         response = client.get(

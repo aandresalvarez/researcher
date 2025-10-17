@@ -60,17 +60,17 @@ export class UammSidebar extends HTMLElement {
         this.querySelectorAll('[data-action="toggle-sidebar"]').forEach(el => el.setAttribute('aria-pressed', collapsed ? 'true' : 'false'));
       }
     } catch(_){}
-    
+
     // Subscribe to store for workspaces
     this._workspacesUnsub = select(selectWorkspaces, (data) => {
       if (!data.loading) this._renderWorkspaces(data.list);
     });
-    
+
     // Subscribe to context for active workspace
     this._contextUnsub = select(selectContext, (ctx) => {
       this._updateActiveWorkspace(ctx.workspace || 'default');
     });
-    
+
     // Initial load
     loadWorkspaces();
   }
@@ -125,9 +125,9 @@ export class UammSidebar extends HTMLElement {
   _renderWorkspaces(wsArr) {
     const list = this.querySelector('[data-role="ws-list"]');
     if (!list) return;
-    if (!wsArr || !wsArr.length) { 
-      list.innerHTML = '<div class="list-group-item small">No workspaces</div>'; 
-      return; 
+    if (!wsArr || !wsArr.length) {
+      list.innerHTML = '<div class="list-group-item small">No workspaces</div>';
+      return;
     }
     const cur = (getState().context && getState().context.workspace) || 'default';
     list.innerHTML = wsArr.map(w => this._renderItem(w, w.slug === cur)).join('');

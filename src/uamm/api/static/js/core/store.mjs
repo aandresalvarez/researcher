@@ -95,4 +95,3 @@ function deepMerge(dst, src) {
 }
 
 export default { getState, setState, patchState, subscribe, select };
-

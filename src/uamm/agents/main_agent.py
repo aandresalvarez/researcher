@@ -6,10 +6,34 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 from uamm.policy.policy import final_score, PolicyConfig, decide
 from uamm.policy.cp import ConformalGate
-from uamm.tools.web_search import web_search
-from uamm.tools.web_fetch import web_fetch
-from uamm.tools.math_eval import math_eval
-from uamm.tools.table_query import table_query
+from uamm.tools.registry import get_registry, ensure_builtins
+
+# Back-compat shim: expose a module-level math_eval symbol that resolves via
+# the ToolRegistry first, with a fallback to the built-in implementation. Some
+# tests patch `uamm.agents.main_agent.math_eval`, so this indirection preserves
+# that contract while still supporting pluggable tools.
+try:  # pragma: no cover - fallback only
+    from uamm.tools.math_eval import math_eval as _builtin_math_eval
+except Exception:  # pragma: no cover
+    _builtin_math_eval = None
+
+
+def math_eval(expr: str) -> float:
+    reg = None
+    try:
+        reg = get_registry()
+    except Exception:
+        reg = None
+    fn = None
+    try:
+        fn = reg.get("MATH_EVAL") if reg else None  # type: ignore[union-attr]
+    except Exception:
+        fn = None
+    if callable(fn):
+        return float(fn(expr))
+    if _builtin_math_eval is not None:
+        return float(_builtin_math_eval(expr))
+    raise RuntimeError("MATH_EVAL tool unavailable")
 from uamm.agents.verifier import Verifier
 from uamm.rag.pack import build_pack
 from uamm.rag.embeddings import embed_text
@@ -302,6 +326,7 @@ class MainAgent:
         cp_enabled: bool = False,
         policy: PolicyConfig | None = None,
         llm_enabled: bool = False,
+        tool_registry: Any | None = None,
     ) -> None:
         self._cfg = policy or PolicyConfig()
         self._cp = ConformalGate(enabled=cp_enabled)
@@ -309,6 +334,11 @@ class MainAgent:
         self._llm = LLMGenerator(enabled_default=llm_enabled)
         self._snne_calibrators: Dict[str, SNNECalibrator] = {}
         self._pcn = PCNVerifier()
+        try:
+            self._tools = tool_registry or get_registry()
+            ensure_builtins(self._tools)
+        except Exception:
+            self._tools = None
 
     def _get_snne_calibrator(self, db_path: Optional[str]) -> Optional[SNNECalibrator]:
         if not db_path:
@@ -712,7 +742,12 @@ class MainAgent:
                         },
                     )
                     try:
-                        _ = web_search(question, k=3)
+                        fn = self._tools.get("WEB_SEARCH") if self._tools else None  # type: ignore[union-attr]
+                        if fn is None:
+                            from uamm.tools.web_search import web_search as _web_search
+
+                            fn = _web_search
+                        _ = fn(question, k=3)
                         tools_used.append(tool_name)
                         tool_budget_ref -= 1
                         tool_budget_turn -= 1
@@ -810,7 +845,12 @@ class MainAgent:
                                 params.get("egress_denylist_hosts", [])
                             ),
                         )
-                        res = web_fetch(url_candidate, policy=pol)
+                        fn_fetch = self._tools.get("WEB_FETCH") if self._tools else None  # type: ignore[union-attr]
+                        if fn_fetch is None:
+                            from uamm.tools.web_fetch import web_fetch as _web_fetch
+
+                            fn_fetch = _web_fetch
+                        res = fn_fetch(url_candidate, policy=pol)
                         fetch_url = res["url"]
                         fetch_snippet = (res.get("text") or "")[:240]
                         tools_used.append(tool_name)
@@ -936,6 +976,7 @@ class MainAgent:
                             "pcn",
                             self._pcn.register(pcn_id, policy=policy, provenance=prov),
                         )
+                        # Use module-level shim to preserve test patchability
                         math_value = math_eval(math_expr)
                         verify_event = self._pcn.verify_math(
                             pcn_id, expr=math_expr, observed_value=math_value
@@ -1045,7 +1086,16 @@ class MainAgent:
                             time_limit_ms = int(
                                 params.get("table_query_time_limit_ms", 250) or 250
                             )
-                            rows = table_query(
+                            fn_tq = (
+                                self._tools.get("TABLE_QUERY") if self._tools else None
+                            )  # type: ignore[union-attr]
+                            if fn_tq is None:
+                                from uamm.tools.table_query import (
+                                    table_query as _table_query,
+                                )
+
+                                fn_tq = _table_query
+                            rows = fn_tq(
                                 db_path,
                                 table_sql,
                                 table_params,

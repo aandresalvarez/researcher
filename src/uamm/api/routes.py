@@ -86,6 +86,11 @@ from uamm.storage.workspaces import (
     resolve_paths as ws_resolve_paths,
 )
 from uamm.config.policy_packs import list_policies, load_policy
+from uamm.tools.registry import (
+    get_registry as _get_tool_registry,
+    import_callable as _import_callable,
+    ensure_builtins as _ensure_tool_builtins,
+)
 
 
 router = APIRouter()
@@ -94,6 +99,33 @@ router = APIRouter()
 DRIFT_QUANTILES = (0.1, 0.25, 0.5, 0.75, 0.9)
 _LAT_BUCKET_KEYS = ["0.1", "0.5", "1", "2.5", "6", "+Inf"]
 _LAT_BUCKET_VALUES = [0.1, 0.5, 1.0, 2.5, 6.0, float("inf")]
+
+# Ensure built-in tools are present for registry-backed usage
+try:
+    _ensure_tool_builtins(_get_tool_registry())
+except Exception:
+    pass
+
+
+def _parse_policy_blob(raw: Any) -> Dict[str, Any]:
+    """Parse a workspace policy blob (JSON-preferred, repr fallback) into dict.
+
+    Back-compat: older rows may store Python repr strings; we tolerate those.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        try:
+            import ast
+
+            val = ast.literal_eval(raw)
+            return val if isinstance(val, dict) else {}
+        except Exception:
+            return {}
 
 
 def _latency_total(buckets: Dict[str, int]) -> int:
@@ -524,6 +556,10 @@ class AnswerRequest(BaseModel):
         True,
         description="Set false to force a single JSON response even when hitting the streaming endpoint.",
     )
+    stream_lite: bool = Field(
+        False,
+        description="If true, the SSE stream emits only ready/final (and tokens if present), suppressing score/tool/trace/pcn/gov events.",
+    )
     max_refinements: int = Field(
         2,
         description="Maximum number of tool-guided refinement loops when the verifier flags issues.",
@@ -575,6 +611,12 @@ class TunerApplyRequest(BaseModel):
     reason: str | None = None
 
 
+class ToolRegisterRequest(BaseModel):
+    name: str
+    path: str  # module:attr or module.attr
+    overwrite: bool = False
+
+
 @router.post(
     "/agent/answer",
     response_model=AgentResultModel,
@@ -594,7 +636,8 @@ def answer(
     q_red, _ = redact(req.question)
     t0 = time.time()
     settings = request.app.state.settings
-    # Apply workspace policy overlay (accept_threshold, borderline_delta, tool budgets)
+    # Resolve per-request workspace policy overlay (do not mutate global settings)
+    overlay: Dict[str, Any] = {}
     try:
         ws = _resolve_workspace(request)
         con = sqlite3.connect(settings.db_path)
@@ -605,59 +648,15 @@ def answer(
         ).fetchone()
         con.close()
         if row:
-            # row["json"] is a str(dict), eval safely with ast.literal_eval
-            import ast
-
-            pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
-            if isinstance(pack, dict):
-                if "accept_threshold" in pack:
-                    settings.accept_threshold = float(pack["accept_threshold"])  # type: ignore[attr-defined]
-                if (
-                    "borderline_delta" in pack
-                    and "borderline_delta" not in req.model_fields_set
-                ):
-                    req.borderline_delta = float(pack["borderline_delta"])  # type: ignore[assignment]
-                if "tool_budget_per_refinement" in pack:
-                    setattr(
-                        settings,
-                        "tool_budget_per_refinement",
-                        int(pack["tool_budget_per_refinement"]),
-                    )
-                if "tool_budget_per_turn" in pack:
-                    setattr(
-                        settings,
-                        "tool_budget_per_turn",
-                        int(pack["tool_budget_per_turn"]),
-                    )
-                if "tools_requiring_approval" in pack:
-                    setattr(
-                        settings,
-                        "tools_requiring_approval",
-                        list(pack["tools_requiring_approval"]),
-                    )
-                if "tools_allowed" in pack:
-                    # Attach to request.state for downstream use
-                    setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
-                if "rag_weight_sparse" in pack:
-                    setattr(
-                        settings, "rag_weight_sparse", float(pack["rag_weight_sparse"])
-                    )
-                if "rag_weight_dense" in pack:
-                    setattr(
-                        settings, "rag_weight_dense", float(pack["rag_weight_dense"])
-                    )
-                if "vector_backend" in pack:
-                    setattr(settings, "vector_backend", str(pack["vector_backend"]))
-                if "lancedb_uri" in pack:
-                    setattr(settings, "lancedb_uri", str(pack["lancedb_uri"]))
-                if "lancedb_table" in pack:
-                    setattr(settings, "lancedb_table", str(pack["lancedb_table"]))
-                if "lancedb_metric" in pack:
-                    setattr(settings, "lancedb_metric", str(pack["lancedb_metric"]))
-                if "lancedb_k" in pack:
-                    setattr(settings, "lancedb_k", int(pack["lancedb_k"]))
+            overlay = _parse_policy_blob(row["json"]) or {}
     except Exception:
-        pass
+        overlay = {}
+    # Borderline delta override per-request
+    if "borderline_delta" in overlay and "borderline_delta" not in req.model_fields_set:
+        try:
+            req.borderline_delta = float(overlay["borderline_delta"])  # type: ignore[assignment]
+        except Exception:
+            pass
     if "borderline_delta" not in req.model_fields_set:
         req.borderline_delta = getattr(
             settings, "borderline_delta", req.borderline_delta
@@ -670,10 +669,8 @@ def answer(
         )
     if "cp_target_mis" not in req.model_fields_set:
         req.cp_target_mis = getattr(settings, "cp_target_mis", req.cp_target_mis)
-    policy = PolicyConfig(
-        tau_accept=settings.accept_threshold,
-        delta=req.borderline_delta,
-    )
+    tau_accept_eff = float(overlay.get("accept_threshold", settings.accept_threshold))
+    policy = PolicyConfig(tau_accept=tau_accept_eff, delta=req.borderline_delta)
     # CP threshold supplier from app state
     tau_supplier = getattr(request.app.state, "cp_tau_supplier", lambda: None)
     # Domain-aware CP enablement: auto-enable if τ available
@@ -702,10 +699,21 @@ def answer(
     params = req.model_dump()
     # ensure budgets from settings are available to agent
     params.setdefault(
-        "tool_budget_per_refinement", getattr(settings, "tool_budget_per_refinement", 2)
+        "tool_budget_per_refinement",
+        int(
+            overlay.get(
+                "tool_budget_per_refinement",
+                getattr(settings, "tool_budget_per_refinement", 2),
+            )
+        ),
     )
     params.setdefault(
-        "tool_budget_per_turn", getattr(settings, "tool_budget_per_turn", 4)
+        "tool_budget_per_turn",
+        int(
+            overlay.get(
+                "tool_budget_per_turn", getattr(settings, "tool_budget_per_turn", 4)
+            )
+        ),
     )
     params.setdefault("max_refinements", req.max_refinements)
     params.setdefault("snne_samples", req.snne_samples)
@@ -714,18 +722,48 @@ def answer(
     # Use per-request resolved DB path when available
     eff_db_path = getattr(request.state, "db_path", None) or settings.db_path
     params.setdefault("db_path", eff_db_path)
-    params.setdefault("rag_weight_sparse", getattr(settings, "rag_weight_sparse", 0.5))
-    params.setdefault("rag_weight_dense", getattr(settings, "rag_weight_dense", 0.5))
-    params.setdefault("vector_backend", getattr(settings, "vector_backend", "none"))
+    params.setdefault(
+        "rag_weight_sparse",
+        float(
+            overlay.get(
+                "rag_weight_sparse", getattr(settings, "rag_weight_sparse", 0.5)
+            )
+        ),
+    )
+    params.setdefault(
+        "rag_weight_dense",
+        float(
+            overlay.get("rag_weight_dense", getattr(settings, "rag_weight_dense", 0.5))
+        ),
+    )
+    params.setdefault(
+        "vector_backend",
+        str(overlay.get("vector_backend", getattr(settings, "vector_backend", "none"))),
+    )
     params.setdefault(
         "lancedb_uri",
-        getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")),
+        overlay.get(
+            "lancedb_uri",
+            getattr(request.state, "lancedb_uri", getattr(settings, "lancedb_uri", "")),
+        ),
     )
     params.setdefault(
-        "lancedb_table", getattr(settings, "lancedb_table", "rag_vectors")
+        "lancedb_table",
+        str(
+            overlay.get(
+                "lancedb_table", getattr(settings, "lancedb_table", "rag_vectors")
+            )
+        ),
     )
-    params.setdefault("lancedb_metric", getattr(settings, "lancedb_metric", "cosine"))
-    params.setdefault("lancedb_k", getattr(settings, "lancedb_k", None))
+    params.setdefault(
+        "lancedb_metric",
+        str(
+            overlay.get("lancedb_metric", getattr(settings, "lancedb_metric", "cosine"))
+        ),
+    )
+    params.setdefault(
+        "lancedb_k", overlay.get("lancedb_k", getattr(settings, "lancedb_k", None))
+    )
     # Egress policy params
     params.setdefault(
         "egress_block_private_ip", getattr(settings, "egress_block_private_ip", True)
@@ -752,13 +790,20 @@ def answer(
     params.setdefault("planning_budget", getattr(settings, "planning_budget", 3))
     params.setdefault("planning_when", getattr(settings, "planning_when", "borderline"))
     # Tool approvals config
-    params["tools_requiring_approval"] = params.get(
-        "tools_requiring_approval"
-    ) or getattr(settings, "tools_requiring_approval", [])
+    params["tools_requiring_approval"] = list(
+        overlay.get(
+            "tools_requiring_approval",
+            getattr(settings, "tools_requiring_approval", []),
+        )
+    )
     # Tool allowlist config (optional)
-    allowed_tools = getattr(request.state, "tools_allowed", None)
-    if allowed_tools is not None:
-        params["tools_allowed"] = list(allowed_tools)
+    if "tools_allowed" in overlay:
+        setattr(request.state, "tools_allowed", list(overlay.get("tools_allowed", [])))
+        params["tools_allowed"] = list(overlay.get("tools_allowed", []))
+    else:
+        allowed_tools = getattr(request.state, "tools_allowed", None)
+        if allowed_tools is not None:
+            params["tools_allowed"] = list(allowed_tools)
     params.setdefault("approvals", getattr(request.app.state, "approvals", None))
     approval_token = request.headers.get("X-Approval-ID")
     approvals_store = getattr(request.app.state, "approvals", None)
@@ -853,6 +898,41 @@ def answer(
     return final
 
 
+@router.get("/tools", summary="List registered tools", tags=["Tools"])
+def tools_list(request: Request) -> Dict[str, Any]:
+    reg = _get_tool_registry()
+    return {"tools": reg.list()}
+
+
+@router.post(
+    "/tools/register", summary="Register a tool by import path", tags=["Tools"]
+)
+def tools_register(req: ToolRegisterRequest, request: Request):
+    _require_role(request, {"admin"})
+    reg = _get_tool_registry()
+    name = req.name.strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "name_required"})
+    if (not req.overwrite) and reg.get(name):
+        return JSONResponse(status_code=409, content={"error": "exists"})
+    try:
+        fn = _import_callable(req.path)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    reg.register(name, fn)
+    return {"ok": True, "name": name}
+
+
+@router.delete("/tools/{name}", summary="Unregister a tool", tags=["Tools"])
+def tools_unregister(name: str, request: Request):
+    _require_role(request, {"admin"})
+    reg = _get_tool_registry()
+    if not reg.get(name):
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    reg.unregister(name)
+    return {"ok": True}
+
+
 def _sse_event(event: str, data: Dict[str, Any]) -> str:
     return f"event: {event}\n" + "data: " + json.dumps(data) + "\n\n"
 
@@ -909,59 +989,15 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             (ws,),
         ).fetchone()
         con.close()
-        if row:
-            import ast
-
-            pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
-            if isinstance(pack, dict):
-                if "accept_threshold" in pack:
-                    settings.accept_threshold = float(pack["accept_threshold"])  # type: ignore[attr-defined]
-                if (
-                    "borderline_delta" in pack
-                    and "borderline_delta" not in req.model_fields_set
-                ):
-                    req.borderline_delta = float(pack["borderline_delta"])  # type: ignore[assignment]
-                if "tool_budget_per_refinement" in pack:
-                    setattr(
-                        settings,
-                        "tool_budget_per_refinement",
-                        int(pack["tool_budget_per_refinement"]),
-                    )
-                if "tool_budget_per_turn" in pack:
-                    setattr(
-                        settings,
-                        "tool_budget_per_turn",
-                        int(pack["tool_budget_per_turn"]),
-                    )
-                if "tools_requiring_approval" in pack:
-                    setattr(
-                        settings,
-                        "tools_requiring_approval",
-                        list(pack["tools_requiring_approval"]),
-                    )
-                if "rag_weight_sparse" in pack:
-                    setattr(
-                        settings, "rag_weight_sparse", float(pack["rag_weight_sparse"])
-                    )
-                if "rag_weight_dense" in pack:
-                    setattr(
-                        settings, "rag_weight_dense", float(pack["rag_weight_dense"])
-                    )
-                if "vector_backend" in pack:
-                    setattr(settings, "vector_backend", str(pack["vector_backend"]))
-                if "lancedb_uri" in pack:
-                    setattr(settings, "lancedb_uri", str(pack["lancedb_uri"]))
-                if "lancedb_table" in pack:
-                    setattr(settings, "lancedb_table", str(pack["lancedb_table"]))
-                if "lancedb_metric" in pack:
-                    setattr(settings, "lancedb_metric", str(pack["lancedb_metric"]))
-                if "lancedb_k" in pack:
-                    setattr(settings, "lancedb_k", int(pack["lancedb_k"]))
+        overlay = _parse_policy_blob(row["json"]) if row else {}
     except Exception:
-        pass
+        overlay = {}
     if "borderline_delta" not in req.model_fields_set:
-        req.borderline_delta = getattr(
-            settings, "borderline_delta", req.borderline_delta
+        req.borderline_delta = float(
+            overlay.get(
+                "borderline_delta",
+                getattr(settings, "borderline_delta", req.borderline_delta),
+            )
         )
     if "snne_samples" not in req.model_fields_set:
         req.snne_samples = getattr(settings, "snne_samples", req.snne_samples)
@@ -971,10 +1007,8 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
         )
     if "cp_target_mis" not in req.model_fields_set:
         req.cp_target_mis = getattr(settings, "cp_target_mis", req.cp_target_mis)
-    policy = PolicyConfig(
-        tau_accept=settings.accept_threshold,
-        delta=req.borderline_delta,
-    )
+    tau_accept_eff = float(overlay.get("accept_threshold", settings.accept_threshold))
+    policy = PolicyConfig(tau_accept=tau_accept_eff, delta=req.borderline_delta)
     tau_supplier = getattr(
         request.app.state, "cp_tau_supplier", lambda *args, **kwargs: None
     )
@@ -1134,13 +1168,24 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
             params.setdefault(
                 "egress_denylist_hosts", getattr(settings, "egress_denylist_hosts", [])
             )
-            params["tools_requiring_approval"] = params.get(
-                "tools_requiring_approval"
-            ) or getattr(settings, "tools_requiring_approval", [])
-            # Tool allowlist config (optional)
-            allowed_tools = getattr(request.state, "tools_allowed", None)
-            if allowed_tools is not None:
-                params["tools_allowed"] = list(allowed_tools)
+            # Tool approvals and allowlist (request-scoped overlay)
+            params["tools_requiring_approval"] = list(
+                overlay.get(
+                    "tools_requiring_approval",
+                    getattr(settings, "tools_requiring_approval", []),
+                )
+            )
+            if "tools_allowed" in overlay:
+                setattr(
+                    request.state,
+                    "tools_allowed",
+                    list(overlay.get("tools_allowed", [])),
+                )
+                params["tools_allowed"] = list(overlay.get("tools_allowed", []))
+            else:
+                allowed_tools = getattr(request.state, "tools_allowed", None)
+                if allowed_tools is not None:
+                    params["tools_allowed"] = list(allowed_tools)
             params.setdefault(
                 "approvals", getattr(request.app.state, "approvals", None)
             )
@@ -1207,6 +1252,14 @@ def answer_stream(req: AnswerRequest, request: Request) -> Response:
                         if evt == "score" and cp_tau is not None:
                             out_data = dict(data)
                             out_data["cp_tau"] = cp_tau
+                        if getattr(req, "stream_lite", False) and evt in {
+                            "score",
+                            "tool",
+                            "pcn",
+                            "gov",
+                            "trace",
+                        }:
+                            continue
                         yield se(evt, out_data)
                 except asyncio.CancelledError:
                     agent_future.cancel()
@@ -1508,6 +1561,7 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
     ws = _resolve_workspace(request) or "default"
     ws_dir = (configured / ws).resolve()
     allowed_roots = {configured, ws_dir}
+
     def _is_within(child: Path, parent: Path) -> bool:
         try:
             child = child.resolve()
@@ -1515,6 +1569,7 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
         except Exception:
             return False
         return parent == child or parent in child.parents
+
     if not any(_is_within(target, root) for root in allowed_roots):
         # Fallback: if explicit env var matches exactly, allow (test/dev convenience)
         try:
@@ -1557,13 +1612,16 @@ def rag_ingest_folder(req: RagIngestFolderRequest, request: Request):
 def rag_env(request: Request):
     """Report ingestion environment readiness (parsers and OCR libraries/binaries)."""
     import shutil as _shutil
+
     settings = request.app.state.settings
+
     def _has(mod):
         try:
             __import__(mod)
             return True
         except Exception:
             return False
+
     env = {
         "python": {
             "pypdf": _has("pypdf"),
@@ -1577,7 +1635,9 @@ def rag_env(request: Request):
         },
         "ocr_enabled": bool(getattr(settings, "docs_ocr_enabled", True)),
         "allowed_exts": sorted(list(ALLOWED_EXTS)),
-        "docs_dir": getattr(request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs")),
+        "docs_dir": getattr(
+            request.state, "docs_dir", getattr(settings, "docs_dir", "data/docs")
+        ),
     }
     return env
 
@@ -1693,7 +1753,14 @@ async def rag_upload_files(request: Request, files: List[UploadFile] = File(...)
             import docx  # type: ignore  # noqa: F401
         except Exception:
             warnings.append("docx_parser_missing")
-    return {"ok": True, "workspace": ws, "saved": saved, "skipped": skipped, "warnings": warnings, **stats}
+    return {
+        "ok": True,
+        "workspace": ws,
+        "saved": saved,
+        "skipped": skipped,
+        "warnings": warnings,
+        **stats,
+    }
 
 
 @router.get("/rag/search")
@@ -1992,7 +2059,9 @@ def workspace_corpus_files(slug: str, request: Request, limit: int = 50):
     limit = max(1, min(500, int(limit or 50)))
     # Resolve effective workspace paths by slug (do not rely solely on middleware state)
     paths = ws_resolve_paths(settings.db_path, slug, settings)
-    docs_root = _Path(paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    docs_root = _Path(
+        paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    ).resolve()
     ws_dir = (docs_root / slug).resolve()
     db_path = paths.get("db_path", settings.db_path)
     con = _sqlite3.connect(db_path)
@@ -2060,7 +2129,9 @@ def workspace_corpus_files(slug: str, request: Request, limit: int = 50):
 
 
 @router.get("/workspaces/{slug}/corpus/file")
-def workspace_corpus_file_detail(slug: str, request: Request, path: str, limit_chunks: int = 100):
+def workspace_corpus_file_detail(
+    slug: str, request: Request, path: str, limit_chunks: int = 100
+):
     """Return detail for a specific ingested file: status row and related corpus chunks.
 
     The `path` must be an absolute path within <docs_dir>/<workspace>. Chunks are sourced from
@@ -2079,7 +2150,9 @@ def workspace_corpus_file_detail(slug: str, request: Request, path: str, limit_c
             raise
     # Resolve effective workspace paths and safety-check: path must be under docs_dir/<workspace>
     paths = ws_resolve_paths(settings.db_path, slug, settings)
-    docs_root = _Path(paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    docs_root = _Path(
+        paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    ).resolve()
     ws_dir = (docs_root / slug).resolve()
     p = _Path(path).resolve()
     if ws_dir not in p.parents and ws_dir != p:
@@ -2149,7 +2222,11 @@ def workspace_corpus_file_detail(slug: str, request: Request, path: str, limit_c
                     "meta": meta,
                 }
             )
-        chunks.sort(key=lambda x: (x["chunk_index"] if isinstance(x.get("chunk_index"), int) else 1e9))
+        chunks.sort(
+            key=lambda x: (
+                x["chunk_index"] if isinstance(x.get("chunk_index"), int) else 1e9
+            )
+        )
     finally:
         con.close()
     summary = {
@@ -2164,6 +2241,7 @@ def workspace_corpus_files_history(slug: str, request: Request, limit: int = 100
     """List recent file ingestion events from corpus_files_history for a workspace."""
     import sqlite3 as _sqlite3
     import os as _os
+
     settings = request.app.state.settings
     try:
         _require_role(request, {"admin", "editor", "viewer"})
@@ -2218,10 +2296,13 @@ def workspace_corpus_files_history(slug: str, request: Request, limit: int = 100
 
 
 @router.get("/workspaces/{slug}/corpus/file/history")
-def workspace_corpus_file_history(slug: str, request: Request, path: str, limit: int = 200):
+def workspace_corpus_file_history(
+    slug: str, request: Request, path: str, limit: int = 200
+):
     """List history events for a specific file path within a workspace."""
     import sqlite3 as _sqlite3
     from pathlib import Path as _Path
+
     settings = request.app.state.settings
     try:
         _require_role(request, {"admin", "editor", "viewer"})
@@ -2230,7 +2311,9 @@ def workspace_corpus_file_history(slug: str, request: Request, path: str, limit:
             raise
     # Resolve effective workspace paths and safety-check
     paths = ws_resolve_paths(settings.db_path, slug, settings)
-    docs_root = _Path(paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))).resolve()
+    docs_root = _Path(
+        paths.get("docs_dir", getattr(settings, "docs_dir", "data/docs"))
+    ).resolve()
     ws_dir = (docs_root / slug).resolve()
     p = _Path(path).resolve()
     if ws_dir not in p.parents and ws_dir != p:
@@ -2732,6 +2815,7 @@ def evals_env(request: Request):
     """
     import importlib
     import os as _os
+
     ok_pai = False
     ok_openai = False
     try:
@@ -2754,7 +2838,13 @@ def evals_env(request: Request):
 
 
 @router.get("/evals/run/stream")
-def evals_run_stream(request: Request, suites: str, update_cp: bool = True, llm: bool = False, run_id: str | None = None) -> Response:
+def evals_run_stream(
+    request: Request,
+    suites: str,
+    update_cp: bool = True,
+    llm: bool = False,
+    run_id: str | None = None,
+) -> Response:
     """Stream per-item progress for one or more suites via SSE.
 
     Query params:
@@ -2781,7 +2871,10 @@ def evals_run_stream(request: Request, suites: str, update_cp: bool = True, llm:
                 yield se("error", {"suite_id": sid, "message": "unknown_suite"})
                 continue
             items = eval_load_items(suite.dataset_path)
-            yield se("suite_start", {"suite_id": sid, "label": suite.label, "total": len(items)})
+            yield se(
+                "suite_start",
+                {"suite_id": sid, "label": suite.label, "total": len(items)},
+            )
             recs: list[dict] = []
             for idx, item in enumerate(items, start=1):
                 # Run single-item eval for immediate result
@@ -2799,7 +2892,16 @@ def evals_run_stream(request: Request, suites: str, update_cp: bool = True, llm:
                 recs.append(rec)
                 # Incremental metrics
                 m = suite_summarize_records(recs)
-                yield se("item", {"suite_id": sid, "index": idx, "record": rec, "metrics": m, "total": len(items)})
+                yield se(
+                    "item",
+                    {
+                        "suite_id": sid,
+                        "index": idx,
+                        "record": rec,
+                        "metrics": m,
+                        "total": len(items),
+                    },
+                )
             # Finalize suite
             metrics = suite_summarize_records(recs)
             by_dom = suite_summarize_by_domain(recs)
@@ -2822,16 +2924,49 @@ def evals_run_stream(request: Request, suites: str, update_cp: bool = True, llm:
                         dom = str(r.get("domain", "default"))
                         grouped.setdefault(dom, []).append(r)
                     for dom, rs in grouped.items():
-                        tuples = [(float(r["S"]), bool(r["accepted"]), bool(r["correct"])) for r in rs]
-                        total_inserted += cp_store.add_artifacts(settings.db_path, run_id=rid, domain=dom, items=tuples)
-                        tau = cp_store.compute_threshold(settings.db_path, domain=dom, target_mis=settings.cp_target_mis)
-                        stats_dom = cp_store.domain_stats(settings.db_path, domain=dom).get(dom, {})
-                        quantiles = quantiles_from_scores([float(r["S"]) for r in rs], DRIFT_QUANTILES)
-                        upsert_reference(settings.db_path, domain=dom, run_id=rid, target_mis=settings.cp_target_mis, tau=tau, stats=stats_dom, snne_quantiles=quantiles)
-                        refs[dom] = {"tau": tau, "stats": stats_dom, "quantiles": quantiles}
+                        tuples = [
+                            (float(r["S"]), bool(r["accepted"]), bool(r["correct"]))
+                            for r in rs
+                        ]
+                        total_inserted += cp_store.add_artifacts(
+                            settings.db_path, run_id=rid, domain=dom, items=tuples
+                        )
+                        tau = cp_store.compute_threshold(
+                            settings.db_path,
+                            domain=dom,
+                            target_mis=settings.cp_target_mis,
+                        )
+                        stats_dom = cp_store.domain_stats(
+                            settings.db_path, domain=dom
+                        ).get(dom, {})
+                        quantiles = quantiles_from_scores(
+                            [float(r["S"]) for r in rs], DRIFT_QUANTILES
+                        )
+                        upsert_reference(
+                            settings.db_path,
+                            domain=dom,
+                            run_id=rid,
+                            target_mis=settings.cp_target_mis,
+                            tau=tau,
+                            stats=stats_dom,
+                            snne_quantiles=quantiles,
+                        )
+                        refs[dom] = {
+                            "tau": tau,
+                            "stats": stats_dom,
+                            "quantiles": quantiles,
+                        }
             except Exception:
                 pass
-            yield se("suite_done", {"suite_id": sid, "metrics": metrics, "by_domain": by_dom, "count": len(recs)})
+            yield se(
+                "suite_done",
+                {
+                    "suite_id": sid,
+                    "metrics": metrics,
+                    "by_domain": by_dom,
+                    "count": len(recs),
+                },
+            )
         yield se("final", {"run_id": rid, "suites": ids})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -2869,7 +3004,9 @@ def evals_run_adhoc_stream(
     except Exception:
         return JSONResponse(status_code=400, content={"error": "invalid items json"})
     if not isinstance(parsed, list) or not all(isinstance(x, dict) for x in parsed):
-        return JSONResponse(status_code=400, content={"error": "items must be a JSON array of objects"})
+        return JSONResponse(
+            status_code=400, content={"error": "items must be a JSON array of objects"}
+        )
     settings = request.app.state.settings
     rid = run_id or f"run-{int(time.time())}"
 
@@ -2904,7 +3041,10 @@ def evals_run_adhoc_stream(
             recs.append(rec)
             # Incremental metrics
             m = suite_summarize_records(recs)
-            yield se("item", {"index": idx, "record": rec, "metrics": m, "total": len(norm_items)})
+            yield se(
+                "item",
+                {"index": idx, "record": rec, "metrics": m, "total": len(norm_items)},
+            )
         # Finalize and persist
         metrics = suite_summarize_records(recs)
         by_dom = suite_summarize_by_domain(recs)
@@ -2926,17 +3066,44 @@ def evals_run_adhoc_stream(
                     dom = str(r.get("domain", "default"))
                     grouped.setdefault(dom, []).append(r)
                 for dom, rs in grouped.items():
-                    tuples = [(float(r["S"]), bool(r["accepted"]), bool(r["correct"])) for r in rs]
-                    total_inserted += cp_store.add_artifacts(settings.db_path, run_id=rid, domain=dom, items=tuples)
-                    tau = cp_store.compute_threshold(settings.db_path, domain=dom, target_mis=settings.cp_target_mis)
-                    stats_dom = cp_store.domain_stats(settings.db_path, domain=dom).get(dom, {})
-                    quantiles = quantiles_from_scores([float(r["S"]) for r in rs], DRIFT_QUANTILES)
-                    upsert_reference(settings.db_path, domain=dom, run_id=rid, target_mis=settings.cp_target_mis, tau=tau, stats=stats_dom, snne_quantiles=quantiles)
+                    tuples = [
+                        (float(r["S"]), bool(r["accepted"]), bool(r["correct"]))
+                        for r in rs
+                    ]
+                    total_inserted += cp_store.add_artifacts(
+                        settings.db_path, run_id=rid, domain=dom, items=tuples
+                    )
+                    tau = cp_store.compute_threshold(
+                        settings.db_path, domain=dom, target_mis=settings.cp_target_mis
+                    )
+                    stats_dom = cp_store.domain_stats(settings.db_path, domain=dom).get(
+                        dom, {}
+                    )
+                    quantiles = quantiles_from_scores(
+                        [float(r["S"]) for r in rs], DRIFT_QUANTILES
+                    )
+                    upsert_reference(
+                        settings.db_path,
+                        domain=dom,
+                        run_id=rid,
+                        target_mis=settings.cp_target_mis,
+                        tau=tau,
+                        stats=stats_dom,
+                        snne_quantiles=quantiles,
+                    )
                     refs[dom] = {"tau": tau, "stats": stats_dom, "quantiles": quantiles}
         except Exception:
             # Persist errors are non-fatal for streaming
             pass
-        yield se("final", {"run_id": rid, "metrics": metrics, "by_domain": by_dom, "count": len(recs)})
+        yield se(
+            "final",
+            {
+                "run_id": rid,
+                "metrics": metrics,
+                "by_domain": by_dom,
+                "count": len(recs),
+            },
+        )
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -4221,23 +4388,18 @@ def table_query(req: TableQueryRequest, request: Request):
             (ws,),
         ).fetchone()
         con.close()
-        if row:
-            import ast
-
-            pack = ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
-            if isinstance(pack, dict):
-                if "table_allowed" in pack:
-                    settings.table_allowed = list(pack["table_allowed"])  # type: ignore[attr-defined]
-                if "table_policies" in pack:
-                    settings.table_policies = dict(pack["table_policies"])  # type: ignore[attr-defined]
-                if "table_allowed_by_domain" in pack:
-                    settings.table_allowed_by_domain = dict(
-                        pack["table_allowed_by_domain"]
-                    )  # type: ignore[attr-defined]
-                if "tools_allowed" in pack:
-                    setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
+        pack = _parse_policy_blob(row["json"]) if row else {}
+        overlay_allowed = pack.get("table_allowed") if isinstance(pack, dict) else None
+        overlay_policies = (
+            pack.get("table_policies") if isinstance(pack, dict) else None
+        )
+        overlay_allowed_by_domain = (
+            pack.get("table_allowed_by_domain") if isinstance(pack, dict) else None
+        )
+        if isinstance(pack, dict) and "tools_allowed" in pack:
+            setattr(request.state, "tools_allowed", list(pack["tools_allowed"]))
     except Exception:
-        pass
+        overlay_allowed = overlay_policies = overlay_allowed_by_domain = None
     # Tool allowlist enforcement: require TABLE_QUERY when allowlist present
     allowed_tools = getattr(request.state, "tools_allowed", None)
     if allowed_tools is not None and "TABLE_QUERY" not in set(allowed_tools):
@@ -4260,11 +4422,17 @@ def table_query(req: TableQueryRequest, request: Request):
             },
         )
     # Determine allowed tables (domain-aware overrides)
-    allowed_tables = settings.table_allowed
-    if req.domain and getattr(settings, "table_allowed_by_domain", None):
-        allowed_tables = settings.table_allowed_by_domain.get(
-            req.domain, settings.table_allowed
+    allowed_tables = (
+        overlay_allowed if overlay_allowed is not None else settings.table_allowed
+    )
+    if req.domain:
+        by_dom = (
+            overlay_allowed_by_domain
+            if overlay_allowed_by_domain is not None
+            else getattr(settings, "table_allowed_by_domain", None)
         )
+        if by_dom:
+            allowed_tables = by_dom.get(req.domain, allowed_tables)
     if not tables_allowed(sql, allowed_tables):
         return JSONResponse(
             status_code=403,
@@ -4278,7 +4446,9 @@ def table_query(req: TableQueryRequest, request: Request):
     from uamm.security.sql_guard import referenced_tables
 
     tables = referenced_tables(sql)
-    pol = settings.table_policies or {}
+    pol = (
+        overlay_policies if overlay_policies is not None else settings.table_policies
+    ) or {}
     # defaults
     max_rows_eff = max(0, min(req.limit, 1000))
     time_limit_ms_eff = 500
@@ -4631,8 +4801,6 @@ def policies_preview(slug: str, name: str, request: Request):
     env_db = os.getenv("UAMM_DB_PATH")
     if env_db:
         setattr(settings, "db_path", env_db)
-    import ast
-
     new_pack = load_policy(name)
     if not new_pack:
         return JSONResponse(status_code=404, content={"error": "unknown_policy"})
@@ -4643,14 +4811,7 @@ def policies_preview(slug: str, name: str, request: Request):
         (slug,),
     ).fetchone()
     con.close()
-    old_pack = {}
-    if row and row["json"]:
-        try:
-            old_pack = (
-                ast.literal_eval(row["json"]) if isinstance(row["json"], str) else {}
-            )
-        except Exception:
-            old_pack = {}
+    old_pack = _parse_policy_blob(row["json"]) if (row and row["json"]) else {}
     keys = set(list(old_pack.keys()) + list(new_pack.keys()))
     diff = {}
     for k in sorted(keys):
@@ -4679,9 +4840,11 @@ def policies_apply(slug: str, req: ApplyPolicyRequest, request: Request):
     try:
         import time as _t
 
+        import json as _json
+
         con.execute(
             "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
-            (slug, req.name, str(pack), _t.time()),
+            (slug, req.name, _json.dumps(pack), _t.time()),
         )
         con.commit()
     finally:
@@ -4736,9 +4899,11 @@ def policies_overlay(slug: str, req: OverlayPolicyRequest, request: Request):
 
     con = sqlite3.connect(settings.db_path)
     try:
+        import json as _json
+
         con.execute(
             "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
-            (slug, "overlay", str(dict(req.overlay or {})), _t.time()),
+            (slug, "overlay", _json.dumps(dict(req.overlay or {})), _t.time()),
         )
         con.commit()
     finally:
@@ -5181,7 +5346,6 @@ def config_import(req: ConfigImportRequest, request: Request):
         con = sqlite3.connect(settings.db_path)
         try:
             import time as _t
-            import ast
 
             for item in req.workspace_policies:
                 ws = str(item.get("workspace", "")).strip()
@@ -5193,20 +5357,20 @@ def config_import(req: ConfigImportRequest, request: Request):
                     pack = load_policy(str(name))
                     if not pack:
                         continue
-                    policy_json = str(pack)
+                    import json as _json
+
+                    policy_json = _json.dumps(pack)
                     pname = str(name)
                 else:
                     # Accept inline policy dict
                     inline = item.get("policy")
-                    try:
-                        if isinstance(inline, str):
-                            inline = ast.literal_eval(inline)
-                        if not isinstance(inline, dict):
-                            continue
-                        policy_json = str(inline)
-                        pname = "inline"
-                    except Exception:
+                    blob = _parse_policy_blob(inline)
+                    if not isinstance(blob, dict):
                         continue
+                    import json as _json
+
+                    policy_json = _json.dumps(blob)
+                    pname = "inline"
                 con.execute(
                     "INSERT OR REPLACE INTO workspace_policies(workspace, policy_name, json, updated) VALUES (?, ?, ?, ?)",
                     (ws, pname, policy_json, _t.time()),

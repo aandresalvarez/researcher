@@ -107,4 +107,3 @@ The file upload system is now fully functional with:
 - Real-time status updates
 
 The system now provides a seamless user experience where files upload, process, and appear in the UI automatically without requiring manual intervention or browser refreshes.
-

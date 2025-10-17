@@ -88,6 +88,7 @@ def ui_answer_stream(
     memory_budget: int = 8,
     max_refinements: int = 2,
     borderline_delta: float = 0.05,
+    stream_lite: bool = False,
     workspace: Optional[str] = None,
 ) -> Response:
     """GET wrapper for SSE streaming so browsers can use EventSource.
@@ -100,6 +101,7 @@ def ui_answer_stream(
         use_memory=use_memory,
         memory_budget=memory_budget,
         stream=True,
+        stream_lite=bool(stream_lite),
         max_refinements=max_refinements,
         borderline_delta=borderline_delta,
         domain=domain,

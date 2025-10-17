@@ -55,4 +55,3 @@ export function navigate(name, params = {}) {
 }
 
 export default { startRouter, navigate };
-

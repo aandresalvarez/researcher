@@ -18,7 +18,7 @@ export async function refreshStats() {
   try {
     const res = await apiFetch(`/workspaces/${encodeURIComponent(ws)}/stats`);
     const data = await res.json();
-    patchState({ stats: { 
+    patchState({ stats: {
       docs: data.docs || (data.counts ? data.counts.docs || 0 : 0),
       steps: data.steps || (data.counts ? data.counts.steps || 0 : 0),
       tau: data.tau || null,

@@ -326,7 +326,9 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
                                     parts.append(page.extract_text() or "")
                                 except Exception:
                                     continue
-                            text = "\n\n".join(p.strip() for p in parts if p and p.strip())
+                            text = "\n\n".join(
+                                p.strip() for p in parts if p and p.strip()
+                            )
                             if text and text.strip():
                                 payload = (path.stem, text)
                             else:
@@ -353,7 +355,11 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
                     if reason is None:
                         try:
                             doc = docx.Document(str(path))  # type: ignore[attr-defined]
-                            parts = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+                            parts = [
+                                p.text
+                                for p in doc.paragraphs
+                                if p.text and p.text.strip()
+                            ]
                             text = "\n\n".join(parts)
                             if text and text.strip():
                                 payload = (path.stem, text)
@@ -401,7 +407,19 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
                 )
                 con.execute(
                     "INSERT OR REPLACE INTO corpus_files(path, mtime, doc_id, meta, workspace) VALUES (?, ?, ?, ?, ?)",
-                    (str(path), mtime, None, meta_blob, getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else "default"),
+                    (
+                        str(path),
+                        mtime,
+                        None,
+                        meta_blob,
+                        getattr(
+                            settings,
+                            "workspace",
+                            getattr(settings, "default_workspace", "default"),
+                        )
+                        if settings
+                        else "default",
+                    ),
                 )
                 con.commit()
             finally:
@@ -415,7 +433,11 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
                 ext=ext,
                 size=int(size or 0),
                 workspace=(
-                    getattr(settings, "workspace", getattr(settings, "default_workspace", "default"))
+                    getattr(
+                        settings,
+                        "workspace",
+                        getattr(settings, "default_workspace", "default"),
+                    )
                     if settings
                     else "default"
                 ),
@@ -434,7 +456,9 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
                         "workspace": getattr(
                             settings,
                             "workspace",
-                            getattr(settings, "default_workspace", "default") if settings else "default",
+                            getattr(settings, "default_workspace", "default")
+                            if settings
+                            else "default",
                         ),
                     },
                 )
@@ -552,7 +576,19 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
         )
         con.execute(
             "INSERT OR REPLACE INTO corpus_files(path, mtime, doc_id, meta, workspace) VALUES (?, ?, ?, ?, ?)",
-            (str(path), mtime, first_id, meta_blob, getattr(settings, "workspace", getattr(settings, "default_workspace", "default")) if settings else "default"),
+            (
+                str(path),
+                mtime,
+                first_id,
+                meta_blob,
+                getattr(
+                    settings,
+                    "workspace",
+                    getattr(settings, "default_workspace", "default"),
+                )
+                if settings
+                else "default",
+            ),
         )
         con.commit()
     finally:
@@ -567,7 +603,9 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
         ext=ext,
         size=int(size or 0),
         workspace=(
-            getattr(settings, "workspace", getattr(settings, "default_workspace", "default"))
+            getattr(
+                settings, "workspace", getattr(settings, "default_workspace", "default")
+            )
             if settings
             else "default"
         ),
@@ -588,7 +626,9 @@ def ingest_file(db_path: str, file_path: str, *, settings=None) -> Optional[str]
                 "workspace": getattr(
                     settings,
                     "workspace",
-                    getattr(settings, "default_workspace", "default") if settings else "default",
+                    getattr(settings, "default_workspace", "default")
+                    if settings
+                    else "default",
                 ),
             },
         )

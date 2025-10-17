@@ -15,6 +15,8 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class Settings:
+    # Profile: core|minimal|full (core reduces defaults & background tasks)
+    profile: str = os.getenv("UAMM_PROFILE", "core")
     env: str = os.getenv("UAMM_ENV", "dev")
     config_path: str = os.getenv("UAMM_CONFIG_PATH", "config/settings.yaml")
     cp_enabled: bool = False
@@ -211,6 +213,18 @@ def load_settings() -> Settings:
     if s.workspace_base_dirs is None:
         raw = (s.workspace_base_dirs_raw or "").strip()
         s.workspace_base_dirs = [p for p in (x.strip() for x in raw.split(",")) if p]
+    # Apply profile defaults (without overriding explicit env vars)
+    prof = (s.profile or "core").lower()
+    if prof == "core":
+        # Keep heavy/advanced subsystems off unless explicitly enabled via env/YAML
+        if os.getenv("UAMM_PLANNING_ENABLED") is None:
+            s.planning_enabled = False
+        if os.getenv("UAMM_GUARDRAILS_ENABLED") is None:
+            s.guardrails_enabled = False
+        if os.getenv("UAMM_DOCS_AUTO_INGEST") is None:
+            s.docs_auto_ingest = False
+        if os.getenv("UAMM_MCP_ENABLED") is None:
+            s.mcp_enabled = False
     # Default restriction: enable in non-dev if not explicitly set
     try:
         if (
